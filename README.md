@@ -26,6 +26,58 @@ Supported targets include Obsidian, Gollum, Azure DevOps (ADO) wikis, Foam, Dend
 
 Full feature list, configuration reference, and target-system presets live in the **[documentation site](https://spenhouet.github.io/confluence-markdown-exporter/)**.
 
+## Recent improvements in this repository
+
+The current repository version includes a reliability and large-backup upgrade. These
+changes may be newer than the latest package published on PyPI; use
+[Install this source checkout](#install-this-source-checkout) when these capabilities are
+required immediately.
+
+### Complete space inventory and backup
+
+- Added `cme list-spaces` with human-readable table, JSON, and CSV output.
+- Space collection pagination now continues past the SDK's first 50 results and removes
+  duplicate keys.
+- Inventory records include instance/space URLs, key, name, Confluence space type,
+  current/archived status, homepage ID, and plain-text description.
+- Added `cme orgs --all-spaces` as an explicit complete-backup scope, including personal
+  and archived spaces that the configured API account can access. Plain `cme orgs` keeps
+  the existing current-global-space scope.
+
+### Images and attachments
+
+- Attachment filenames use the unique Confluence attachment content ID by default,
+  avoiding overwrites when different records share a `fileId`.
+- Large files are streamed in 1 MiB chunks instead of being loaded entirely into memory.
+- Downloads are written atomically and their advertised size is checked before replacing
+  an existing file; interrupted temporary files are removed.
+- Atomic writes now use normal system permissions (`0666` filtered by the process umask)
+  and preserve existing permission bits when replacing files, so local preview processes
+  can read exported images according to the destination's access policy.
+
+### Parallelism and output safety
+
+- Multiple space trees can be discovered concurrently with
+  `connection_config.space_workers`; page export remains bounded by
+  `connection_config.max_workers`.
+- API clients are isolated per worker thread.
+- A cross-process lock prevents two exporters from writing to the same output directory.
+  Independent exports can still run in parallel when each uses a separate output path.
+- Export paths are checked for traversal, duplicate ownership, and page/attachment
+  collisions before files are written.
+
+### Resume, retry, and verification
+
+- Page and space failures are isolated so remaining work can continue.
+- Partial runs exit with status `1` and write a sanitized
+  `confluence-failures.json`; `cme retry-failures` replays only those recorded scopes.
+- Re-running the original command resumes from the atomic `confluence-lock.json` and
+  re-exports artifacts that are missing locally.
+- Successful runs produce `confluence-manifest.json` with byte sizes and SHA-256 hashes
+  for exported artifacts.
+- Optional Jira enrichment is skipped when Jira credentials are not configured instead
+  of stopping the Confluence export.
+
 ## Quickstart
 
 ### 1. Install
