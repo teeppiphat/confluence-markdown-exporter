@@ -13,10 +13,15 @@ import pytest
 from requests import HTTPError
 
 from confluence_markdown_exporter.confluence import Attachment
+from confluence_markdown_exporter.confluence import Organization
 from confluence_markdown_exporter.confluence import Page
 from confluence_markdown_exporter.confluence import Space
 from confluence_markdown_exporter.confluence import User
 from confluence_markdown_exporter.confluence import Version
+from confluence_markdown_exporter.confluence import export_pages
+from confluence_markdown_exporter.utils.lockfile import AttachmentEntry
+from confluence_markdown_exporter.utils.rich_console import get_stats
+from confluence_markdown_exporter.utils.rich_console import reset_stats
 
 
 class MockPage:
@@ -340,6 +345,15 @@ class TestAttachmentsForExport:
             result = page._attachments_for_export()
         assert att not in result
 
+    def test_empty_file_id_does_not_match_every_page_body(self) -> None:
+        """Server attachments without fileId are not treated as referenced by default."""
+        att = _make_attachment("77777", "", title="unused.png")
+        page = _make_page(body="no references here", body_export="", attachments=[att])
+        with patch("confluence_markdown_exporter.confluence.settings") as s:
+            s.export.attachments_export = "referenced"
+            result = page._attachments_for_export()
+        assert att not in result
+
     def test_attachments_export_all_returns_all(self) -> None:
         att1 = _make_attachment("111", "aaa")
         att2 = _make_attachment("222", "bbb", title="other.svg", media_type="image/svg+xml")
@@ -384,8 +398,58 @@ class TestAttachmentsExportFlag:
 
             result = Page.export_attachments(page)
 
-        att.export.assert_called_once()
+        att.export.assert_called_once_with(overwrite=True)
         assert "att-1" in result
+
+    def test_changed_attachment_overwrites_existing_file(self, tmp_path: Path) -> None:
+        """A new attachment version replaces a file at the same export path."""
+        att = self._make_attachment_mock(version=4)
+        att.export.return_value = True
+        page = self._make_page_mock([att])
+        existing_path = tmp_path / att.export_path
+        existing_path.parent.mkdir(parents=True)
+        existing_path.write_bytes(b"old")
+
+        with (
+            patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
+            patch(
+                "confluence_markdown_exporter.confluence.LockfileManager"
+            ) as mock_lockfile,
+            patch("confluence_markdown_exporter.confluence.get_stats"),
+        ):
+            mock_settings.export.attachments_export = "referenced"
+            mock_settings.export.output_path = tmp_path
+            mock_lockfile.get_page_attachment_entries.return_value = {
+                "att-1": AttachmentEntry(version=3, path=str(att.export_path))
+            }
+
+            result = Page.export_attachments(page)
+
+        att.export.assert_called_once_with(overwrite=True)
+        assert result["att-1"].version == 4
+
+    def test_failed_attachment_fails_page_export(self, tmp_path: Path) -> None:
+        """A failed required download must not be returned as a completed lock entry."""
+        att = self._make_attachment_mock()
+        att.title = "missing.png"
+        att.export.return_value = False
+        page = self._make_page_mock([att])
+
+        with (
+            patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
+            patch(
+                "confluence_markdown_exporter.confluence.LockfileManager"
+            ) as mock_lockfile,
+            patch("confluence_markdown_exporter.confluence.get_stats"),
+        ):
+            mock_settings.export.attachments_export = "referenced"
+            mock_settings.export.output_path = tmp_path
+            mock_lockfile.get_page_attachment_entries.return_value = {}
+
+            with pytest.raises(RuntimeError, match="Failed to export 1 attachment"):
+                Page.export_attachments(page)
+
+        att.export.assert_called_once_with(overwrite=True)
 
     def test_disabled_skips_download_and_lockfile(self) -> None:
         """With attachments_export='disabled', no download and no lockfile lookup."""
@@ -467,6 +531,62 @@ class TestAttachmentsExportFlag:
 
         assert len(page.attachments) == 1
         assert page.attachments[0].id == "att-1"
+
+
+class TestExportPagesStats:
+    """Multiple export scopes contribute to one command-level summary."""
+
+    def test_totals_accumulate_across_calls(self) -> None:
+        first = MagicMock(id=1, title="First")
+        second = MagicMock(id=2, title="Second")
+        reset_stats()
+
+        with patch(
+            "confluence_markdown_exporter.confluence.LockfileManager"
+        ) as mock_lockfile:
+            mock_lockfile.should_export.return_value = False
+            export_pages([first])
+            export_pages([second])
+
+        stats = get_stats()
+        assert stats.total == 2
+        assert stats.skipped == 2
+
+
+class TestOrganizationIsolation:
+    """A discovery failure in one space must not block the remaining spaces."""
+
+    def test_export_continues_after_space_discovery_failure(self) -> None:
+        class FakeSpace:
+            def __init__(self, key: str, name: str, result: object) -> None:
+                self.key = key
+                self.name = name
+                self._result = result
+
+            @property
+            def pages(self) -> list[MagicMock]:
+                if isinstance(self._result, Exception):
+                    raise self._result
+                return self._result  # type: ignore[return-value]
+
+        page = MagicMock(id=2, title="Good page")
+        org = Organization.model_construct(
+            base_url="https://example.test",
+            spaces=[
+                FakeSpace("BAD", "Bad space", RuntimeError("discovery failed")),
+                FakeSpace("GOOD", "Good space", [page]),
+            ],
+        )
+        reset_stats()
+
+        with patch("confluence_markdown_exporter.confluence.export_pages") as mock_export_pages:
+            org.export()
+
+        mock_export_pages.assert_called_once_with([page])
+        stats = get_stats()
+        assert stats.scopes_failed == 1
+        assert stats.failure_snapshot()[0].category == "space-discovery"
+        assert stats.failure_snapshot()[0].identifier == "BAD"
 
 
 class TestTransformErrorImg:

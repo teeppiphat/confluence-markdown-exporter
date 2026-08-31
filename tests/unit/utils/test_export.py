@@ -119,6 +119,22 @@ class TestSaveFile:
             with pytest.raises(TypeError, match=r"Content must be either a string or bytes\."):
                 save_file(file_path, 123)  # type: ignore[arg-type]
 
+    def test_failed_atomic_replace_preserves_existing_file(self) -> None:
+        """A failed commit leaves the previous destination intact and removes temp files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            file_path = directory / "test.txt"
+            file_path.write_text("original", encoding="utf-8")
+
+            with (
+                patch.object(Path, "replace", side_effect=OSError("replace failed")),
+                pytest.raises(OSError, match="replace failed"),
+            ):
+                save_file(file_path, "replacement")
+
+            assert file_path.read_text(encoding="utf-8") == "original"
+            assert list(directory.glob(".test.txt.*.tmp")) == []
+
 
 class TestSanitizeFilename:
     """Test cases for sanitize_filename function."""

@@ -27,6 +27,7 @@ _CONFIG_KEYS_EPILOG = (
     "| `export.save_log_to_file` | Also write logs to `cme.log` next to the config file |\n\n"
     "| `export.skip_unchanged` | Skip pages unchanged since last export |\n\n"
     "| `export.cleanup_stale` | Delete local files for removed pages |\n\n"
+    "| `export.failure_report_name` | JSON report written when an export has failures |\n\n"
     "| `export.page_path` | File path template for exported pages |\n\n"
     "| `export.attachment_path` | File path template for exported attachments |\n\n"
     "| `export.page_href` | Link style for pages: `relative` or `absolute` |\n\n"

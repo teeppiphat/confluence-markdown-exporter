@@ -684,6 +684,13 @@ class ExportConfig(BaseModel):
         title="Lock File Name",
         description="Name of the lock file used to track exported pages.",
     )
+    failure_report_name: str = Field(
+        default="confluence-failures.json",
+        title="Failure Report Name",
+        description=(
+            "Name of the sanitized JSON report written when an export finishes with errors."
+        ),
+    )
     existence_check_batch_size: int = Field(
         default=250,
         title="Existence Check Batch Size",

@@ -2,7 +2,9 @@ import logging
 import re
 import urllib.parse
 from threading import Lock
+from threading import current_thread
 from threading import local
+from threading import main_thread
 from typing import Annotated
 
 import requests
@@ -241,25 +243,9 @@ class ApiClientFactory:
         return instance
 
 
-def get_confluence_instance(url: str) -> ConfluenceApiSdk:
-    """Get authenticated Confluence API client for *url*.
-
-    Creates a new client if one doesn't exist for that URL yet and caches it.
-    Prompts for auth config on connection failure.
-
-    When the configured auth for *url* includes a Cloud ID, API calls are routed through
-    the Atlassian API gateway (``https://api.atlassian.com/ex/confluence/{cloud_id}``),
-    which enables the use of scoped API tokens.  For standard Atlassian Cloud instances
-    (``.atlassian.net``) the Cloud ID is fetched and stored automatically on first connection.
-    """
-    url = normalize_instance_url(ensure_service_gateway_url(url, "confluence"))
-    with _clients_lock:
-        if url in _confluence_clients:
-            logger.debug("Confluence client cache hit for %s", url)
-            return _confluence_clients[url]
-
+def _create_confluence_client(url: str) -> ConfluenceApiSdk:
+    """Create a new authenticated Confluence client without caching it."""
     settings = get_settings()
-
     auth = settings.auth.get_instance(url)
     if auth is None:
         raise AuthNotConfiguredError(url, "Confluence")
@@ -286,6 +272,28 @@ def get_confluence_instance(url: str) -> ConfluenceApiSdk:
     if settings.export.log_level == "DEBUG":
         client.session.hooks["response"] = [response_hook]
 
+    return client
+
+
+def get_confluence_instance(url: str) -> ConfluenceApiSdk:
+    """Get authenticated Confluence API client for *url*.
+
+    Creates a new client if one doesn't exist for that URL yet and caches it.
+    Prompts for auth config on connection failure.
+
+    When the configured auth for *url* includes a Cloud ID, API calls are routed through
+    the Atlassian API gateway (``https://api.atlassian.com/ex/confluence/{cloud_id}``),
+    which enables the use of scoped API tokens.  For standard Atlassian Cloud instances
+    (``.atlassian.net``) the Cloud ID is fetched and stored automatically on first connection.
+    """
+    url = normalize_instance_url(ensure_service_gateway_url(url, "confluence"))
+    with _clients_lock:
+        if url in _confluence_clients:
+            logger.debug("Confluence client cache hit for %s", url)
+            return _confluence_clients[url]
+
+    client = _create_confluence_client(url)
+
     with _clients_lock:
         _confluence_clients[url] = client
     return client
@@ -303,7 +311,14 @@ def get_thread_confluence(base_url: str) -> ConfluenceApiSdk:
         _thread_local.clients = {}
     if base_url not in _thread_local.clients:
         logger.debug("Initializing thread-local Confluence client for %s", base_url)
-        _thread_local.clients[base_url] = get_confluence_instance(base_url)
+        # The main thread may reuse the process-wide discovery client. Worker
+        # threads must create their own client because requests.Session is not
+        # safe to share concurrently.
+        if current_thread() is main_thread():
+            client = get_confluence_instance(base_url)
+        else:
+            client = _create_confluence_client(base_url)
+        _thread_local.clients[base_url] = client
     return _thread_local.clients[base_url]
 
 

@@ -322,6 +322,32 @@ class TestLockfileManagerShouldExport:
             page = _make_mock_page(page_id=123, version_number=5, export_path="space/Page A.md")
             assert LockfileManager.should_export(page) is False
 
+    def test_missing_tracked_attachment_should_export(self) -> None:
+        """A missing attachment triggers repair even when the page itself is unchanged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            md_file = output / "space" / "Page A.md"
+            md_file.parent.mkdir(parents=True)
+            md_file.write_text("content", encoding="utf-8")
+
+            LockfileManager._output_path = output
+            LockfileManager._lock = _lock_with_pages({
+                "123": PageEntry(
+                    title="Page A",
+                    version=5,
+                    export_path="space/Page A.md",
+                    attachments={
+                        "att-1": AttachmentEntry(
+                            version=2,
+                            path="space/attachments/att-1.png",
+                        )
+                    },
+                ),
+            })
+
+            page = _make_mock_page(page_id=123, version_number=5, export_path="space/Page A.md")
+            assert LockfileManager.should_export(page) is True
+
 
 class TestLockfileManagerMarkSeen:
     """Test cases for LockfileManager.mark_seen."""

@@ -42,6 +42,40 @@ Pick the install method that fits your environment. All methods produce the same
 
     [`uv tool install`](https://docs.astral.sh/uv/concepts/tools/) puts the CLI on your PATH inside its own isolated environment. [`uvx`](https://docs.astral.sh/uv/guides/tools/) runs it ephemerally; handy for one-off exports or CI.
 
+=== "Source checkout"
+
+    Install the exact code in a local checkout, including committed or uncommitted
+    changes:
+
+    ```bash
+    git clone https://github.com/teeppiphat/confluence-markdown-exporter.git
+    cd confluence-markdown-exporter
+    uv tool install --force .
+    cme --help
+    ```
+
+    Re-run `uv tool install --force .` after changing the source. For development,
+    create an editable project environment so source edits are reflected immediately:
+
+    ```bash
+    uv sync --group dev
+    uv run cme --help
+    uv run pytest -q
+    ```
+
+=== "Git commit"
+
+    Install a pushed branch, tag, or commit directly from Git. A commit SHA is
+    recommended for reproducible installations:
+
+    ```bash
+    uv tool install --force \
+      "git+https://github.com/teeppiphat/confluence-markdown-exporter.git@<commit-sha>"
+    ```
+
+    This method cannot see uncommitted local changes. The Git ref must have been
+    pushed and must be accessible from the machine performing the installation.
+
 === "Docker"
 
     ```bash

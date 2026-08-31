@@ -3,6 +3,10 @@ import logging
 import platform
 import sys
 import urllib.parse
+from dataclasses import asdict
+from datetime import datetime
+from datetime import timezone
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -15,8 +19,10 @@ from confluence_markdown_exporter import __version__
 from confluence_markdown_exporter import config as config_module
 from confluence_markdown_exporter.utils.app_data_store import APP_CONFIG_PATH
 from confluence_markdown_exporter.utils.app_data_store import get_settings
+from confluence_markdown_exporter.utils.export import save_file
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.measure_time import measure
+from confluence_markdown_exporter.utils.rich_console import ExportStats
 from confluence_markdown_exporter.utils.rich_console import console
 from confluence_markdown_exporter.utils.rich_console import get_rich_console
 from confluence_markdown_exporter.utils.rich_console import get_stats
@@ -109,27 +115,25 @@ def _init_logging() -> None:
     setup_logging(export.log_level, log_file=log_file)
 
 
-def _print_summary() -> None:
-    """Print a rich summary panel with export statistics."""
-    stats = get_stats()
-    if stats.total == 0:
-        return
+def _add_page_summary_rows(grid: Table, stats: ExportStats) -> None:
+    """Add page and scope counters to the summary table."""
+    if stats.total:
+        grid.add_row("Pages", "")
+        grid.add_row("  Total", str(stats.total))
+        grid.add_row("  [success]Exported[/success]", f"[success]{stats.exported}[/success]")
+        grid.add_row("  [dim]Skipped (unchanged)[/dim]", str(stats.skipped))
+        if stats.removed:
+            grid.add_row("  [dim]Removed[/dim]", str(stats.removed))
+        if stats.failed:
+            grid.add_row("  [error]Failed[/error]", f"[error]{stats.failed}[/error]")
 
-    output_path = get_settings().export.output_path
+    if stats.scopes_failed:
+        grid.add_row("Scopes", "")
+        grid.add_row("  [error]Failed[/error]", f"[error]{stats.scopes_failed}[/error]")
 
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="dim", justify="right")
-    grid.add_column()
 
-    grid.add_row("Pages", "")
-    grid.add_row("  Total", str(stats.total))
-    grid.add_row("  [success]Exported[/success]", f"[success]{stats.exported}[/success]")
-    grid.add_row("  [dim]Skipped (unchanged)[/dim]", str(stats.skipped))
-    if stats.removed:
-        grid.add_row("  [dim]Removed[/dim]", str(stats.removed))
-    if stats.failed:
-        grid.add_row("  [error]Failed[/error]", f"[error]{stats.failed}[/error]")
-
+def _add_attachment_summary_rows(grid: Table, stats: ExportStats) -> None:
+    """Add attachment counters to the summary table."""
     attachments_total = (
         stats.attachments_exported + stats.attachments_skipped + stats.attachments_failed
     )
@@ -145,13 +149,87 @@ def _print_summary() -> None:
         if stats.attachments_failed:
             grid.add_row("  [error]Failed[/error]", f"[error]{stats.attachments_failed}[/error]")
 
+
+def _print_summary() -> None:
+    """Print a rich summary panel with export statistics."""
+    stats = get_stats()
+    if stats.total == 0 and stats.scopes_failed == 0:
+        return
+
+    output_path = get_settings().export.output_path
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="dim", justify="right")
+    grid.add_column()
+
+    _add_page_summary_rows(grid, stats)
+    _add_attachment_summary_rows(grid, stats)
+
     grid.add_row("Output", str(output_path))
 
-    if stats.failed:
+    if stats.failed or stats.scopes_failed or stats.attachments_failed:
         title = "[warning]Export finished with errors[/warning]"
     else:
         title = "[success]Export complete[/success]"
     console.print(Panel(grid, title=title, expand=False))
+
+
+def _write_failure_report() -> Path | None:
+    """Write a sanitized JSON failure report, or remove a stale successful-run report."""
+    stats = get_stats()
+    settings = get_settings()
+    report_path = settings.export.output_path / settings.export.failure_report_name
+    failures = stats.failure_snapshot()
+    has_failures = bool(stats.failed or stats.scopes_failed or stats.attachments_failed or failures)
+
+    if not has_failures:
+        report_path.unlink(missing_ok=True)
+        return None
+
+    payload = {
+        "report_version": 1,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "pages_total": stats.total,
+            "pages_exported": stats.exported,
+            "pages_skipped": stats.skipped,
+            "pages_failed": stats.failed,
+            "scopes_failed": stats.scopes_failed,
+            "attachments_failed": stats.attachments_failed,
+        },
+        "failures": [asdict(failure) for failure in failures],
+    }
+    save_file(report_path, json.dumps(payload, indent=2, ensure_ascii=False))
+    return report_path
+
+
+def _finish_export() -> None:
+    """Persist run diagnostics, print the summary, and signal partial failure to callers."""
+    report_path = _write_failure_report()
+    _print_summary()
+    if report_path is not None:
+        console.print(f"[warning]Failure report:[/warning] {report_path}")
+        raise typer.Exit(code=1)
+
+
+def _safe_scope_identifier(url: str) -> str:
+    """Return a URL identifier without credentials, query parameters, or fragments."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or "unknown-host"
+    path = parsed.path.rstrip("/") or "/"
+    return f"{host}{path}"
+
+
+def _record_scope_failure(category: str, url: str, error: Exception) -> None:
+    """Record a sanitized top-level discovery/export failure and continue the run."""
+    identifier = _safe_scope_identifier(url)
+    stats = get_stats()
+    stats.inc_scopes_failed()
+    stats.record_failure(
+        category=category,
+        identifier=identifier,
+        title=identifier,
+        error_type=type(error).__name__,
+    )
 
 
 @app.command(
@@ -195,8 +273,13 @@ def pages(
         exported_urls: set[str] = set()
         fetched_pages: list[Page] = []
         for page_url in page_urls:
-            with console.status(f"[dim]Fetching [highlight]{page_url}[/highlight]…[/dim]"):
-                page = Page.from_url(page_url)
+            try:
+                with console.status(f"[dim]Fetching [highlight]{page_url}[/highlight]…[/dim]"):
+                    page = Page.from_url(page_url)
+            except Exception as e:
+                logger.exception("Failed to fetch page scope %s", _safe_scope_identifier(page_url))
+                _record_scope_failure("page-discovery", page_url, e)
+                continue
             PageTitleRegistry.register(int(page.id), page.title)
             fetched_pages.append(page)
 
@@ -211,15 +294,27 @@ def pages(
                     attachment_entries = page.export()
                 LockfileManager.record_page(page, attachment_entries)
                 stats.inc_exported()
-            except Exception:
+            except Exception as e:
                 logger.exception("Failed to export page %s", page.title)
                 stats.inc_failed()
+                stats.record_failure(
+                    category="page",
+                    identifier=str(page.id),
+                    title=page.title,
+                    error_type=type(e).__name__,
+                )
             exported_urls.add(page.base_url)
 
         for base_url in exported_urls:
-            sync_removed_pages(base_url)
+            try:
+                sync_removed_pages(base_url)
+            except Exception as e:
+                logger.exception(
+                    "Failed to clean up exports for %s", _safe_scope_identifier(base_url)
+                )
+                _record_scope_failure("cleanup", base_url, e)
 
-    _print_summary()
+    _finish_export()
 
 
 app.command(
@@ -267,19 +362,30 @@ def pages_with_descendants(
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
     _init_logging()
+    reset_stats()
     with measure(f"Export pages {', '.join(page_urls)} with descendants"):
         LockfileManager.init()
 
         exported_urls: set[str] = set()
         for page_url in page_urls:
-            page = Page.from_url(page_url)
-            page.export_with_descendants()
-            exported_urls.add(page.base_url)
+            try:
+                page = Page.from_url(page_url)
+                page.export_with_descendants()
+                exported_urls.add(page.base_url)
+            except Exception as e:
+                logger.exception("Failed to export page tree %s", _safe_scope_identifier(page_url))
+                _record_scope_failure("page-tree", page_url, e)
 
         for base_url in exported_urls:
-            sync_removed_pages(base_url)
+            try:
+                sync_removed_pages(base_url)
+            except Exception as e:
+                logger.exception(
+                    "Failed to clean up exports for %s", _safe_scope_identifier(base_url)
+                )
+                _record_scope_failure("cleanup", base_url, e)
 
-    _print_summary()
+    _finish_export()
 
 
 app.command(
@@ -328,19 +434,30 @@ def spaces(
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
     _init_logging()
+    reset_stats()
     with measure(f"Export spaces {', '.join(space_urls)}"):
         LockfileManager.init()
 
         exported_urls: set[str] = set()
         for space_url in space_urls:
-            space = Space.from_url(space_url)
-            space.export()
-            exported_urls.add(space.base_url)
+            try:
+                space = Space.from_url(space_url)
+                space.export()
+                exported_urls.add(space.base_url)
+            except Exception as e:
+                logger.exception("Failed to export space %s", _safe_scope_identifier(space_url))
+                _record_scope_failure("space", space_url, e)
 
         for base_url in exported_urls:
-            sync_removed_pages(base_url)
+            try:
+                sync_removed_pages(base_url)
+            except Exception as e:
+                logger.exception(
+                    "Failed to clean up exports for %s", _safe_scope_identifier(base_url)
+                )
+                _record_scope_failure("cleanup", base_url, e)
 
-    _print_summary()
+    _finish_export()
 
 
 app.command(
@@ -387,15 +504,22 @@ def orgs(
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
     _init_logging()
+    reset_stats()
     with measure("Export all spaces"):
         LockfileManager.init()
 
         for base_url in base_urls:
-            org = Organization.from_url(base_url)
-            org.export()
-            sync_removed_pages(base_url)
+            try:
+                org = Organization.from_url(base_url)
+                org.export()
+                sync_removed_pages(base_url)
+            except Exception as e:
+                logger.exception(
+                    "Failed to export organization %s", _safe_scope_identifier(base_url)
+                )
+                _record_scope_failure("organization", base_url, e)
 
-    _print_summary()
+    _finish_export()
 
 
 app.command(

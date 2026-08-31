@@ -239,6 +239,17 @@ def setup_logging(log_level: str = "INFO", log_file: Path | None = None) -> None
 
 
 @dataclass
+class ExportFailure:
+    """Sanitized failure metadata safe to persist in an export report."""
+
+    category: str
+    identifier: str
+    title: str
+    error_type: str
+    status_code: int | None = None
+
+
+@dataclass
 class ExportStats:
     """Thread-safe counters for a single export run."""
 
@@ -246,12 +257,19 @@ class ExportStats:
     exported: int = 0
     skipped: int = 0
     failed: int = 0
+    scopes_failed: int = 0
     removed: int = 0
     attachments_exported: int = 0
     attachments_skipped: int = 0
     attachments_failed: int = 0
     attachments_removed: int = 0
+    failures: list[ExportFailure] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def add_total(self, count: int) -> None:
+        """Add pages to the total scope for this command run."""
+        with self._lock:
+            self.total += count
 
     def inc_exported(self) -> None:
         """Increment the exported counter by 1."""
@@ -267,6 +285,11 @@ class ExportStats:
         """Increment the failed counter by 1."""
         with self._lock:
             self.failed += 1
+
+    def inc_scopes_failed(self) -> None:
+        """Increment the discovery or top-level scope failure counter by 1."""
+        with self._lock:
+            self.scopes_failed += 1
 
     def inc_removed(self) -> None:
         """Increment the pages removed counter by 1."""
@@ -292,6 +315,32 @@ class ExportStats:
         """Increment the attachments removed counter by 1."""
         with self._lock:
             self.attachments_removed += 1
+
+    def record_failure(
+        self,
+        *,
+        category: str,
+        identifier: str,
+        title: str,
+        error_type: str,
+        status_code: int | None = None,
+    ) -> None:
+        """Record sanitized failure details without response bodies or credentials."""
+        with self._lock:
+            self.failures.append(
+                ExportFailure(
+                    category=category,
+                    identifier=identifier,
+                    title=title,
+                    error_type=error_type,
+                    status_code=status_code,
+                )
+            )
+
+    def failure_snapshot(self) -> list[ExportFailure]:
+        """Return a stable copy of failures recorded by worker threads."""
+        with self._lock:
+            return list(self.failures)
 
 
 # Module-level stats instance reset at the start of each export run

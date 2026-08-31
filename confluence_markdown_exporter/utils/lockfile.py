@@ -280,10 +280,25 @@ class LockfileManager:
             logger.debug("Page id=%s has no version info — will export", page_id)
             return True
 
-        # Re-export if the output file is missing from disk
-        if cls._output_path is not None and not (cls._output_path / entry.export_path).exists():
-            logger.debug("Page id=%s output file missing — will re-export", page_id)
-            return True
+        # Re-export when the page output or any attachment recorded as complete
+        # is missing. This repairs interrupted exports and later local deletions
+        # without requiring a Confluence page-version change.
+        if cls._output_path is not None:
+            artifact_paths = [
+                entry.export_path,
+                *(attachment.path for attachment in entry.attachments.values()),
+            ]
+            missing_path = next(
+                (path for path in artifact_paths if not (cls._output_path / path).exists()),
+                None,
+            )
+            if missing_path is not None:
+                logger.debug(
+                    "Page id=%s exported artifact missing at %s — will re-export",
+                    page_id,
+                    missing_path,
+                )
+                return True
 
         # Export if version or export_path has changed
         if entry.version != page.version.number or entry.export_path != str(page.export_path):

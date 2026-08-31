@@ -1,10 +1,20 @@
 """Unit tests for main module."""
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
 import pytest
 import typer
+from typer.testing import CliRunner
 
+from confluence_markdown_exporter.main import _finish_export
+from confluence_markdown_exporter.main import _write_failure_report
 from confluence_markdown_exporter.main import app
 from confluence_markdown_exporter.main import version
+from confluence_markdown_exporter.utils.rich_console import reset_stats
 
 
 class TestVersionCommand:
@@ -43,3 +53,126 @@ class TestAppConfiguration:
         """Test that the config sub-app is registered as a command group."""
         group_names = [group.name for group in app.registered_groups]
         assert "config" in group_names
+
+
+class TestFailureReport:
+    """Failure reports are sanitized and drive the CLI exit status."""
+
+    @staticmethod
+    def _settings(tmp_path: Path) -> SimpleNamespace:
+        return SimpleNamespace(
+            export=SimpleNamespace(
+                output_path=tmp_path,
+                failure_report_name="confluence-failures.json",
+            )
+        )
+
+    def test_write_failure_report_contains_only_sanitized_metadata(self, tmp_path: Path) -> None:
+        stats = reset_stats(total=2)
+        stats.inc_failed()
+        stats.record_failure(
+            category="page",
+            identifier="123",
+            title="Example page",
+            error_type="RuntimeError",
+        )
+
+        with patch(
+            "confluence_markdown_exporter.main.get_settings",
+            return_value=self._settings(tmp_path),
+        ):
+            report_path = _write_failure_report()
+
+        assert report_path == tmp_path / "confluence-failures.json"
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        assert payload["summary"]["pages_failed"] == 1
+        assert payload["failures"] == [
+            {
+                "category": "page",
+                "identifier": "123",
+                "title": "Example page",
+                "error_type": "RuntimeError",
+                "status_code": None,
+            }
+        ]
+        assert "message" not in payload["failures"][0]
+
+    def test_successful_run_removes_stale_failure_report(self, tmp_path: Path) -> None:
+        reset_stats(total=1)
+        report_path = tmp_path / "confluence-failures.json"
+        report_path.write_text("stale", encoding="utf-8")
+
+        with patch(
+            "confluence_markdown_exporter.main.get_settings",
+            return_value=self._settings(tmp_path),
+        ):
+            assert _write_failure_report() is None
+
+        assert not report_path.exists()
+
+    def test_finish_export_raises_exit_one_when_report_exists(self, tmp_path: Path) -> None:
+        report_path = tmp_path / "confluence-failures.json"
+        with (
+            patch(
+                "confluence_markdown_exporter.main._write_failure_report",
+                return_value=report_path,
+            ),
+            patch("confluence_markdown_exporter.main._print_summary"),
+            patch("confluence_markdown_exporter.main.console"),
+            pytest.raises(typer.Exit) as exc_info,
+        ):
+            _finish_export()
+
+        assert exc_info.value.exit_code == 1
+
+    def test_pages_command_returns_exit_one_after_partial_failure(self, tmp_path: Path) -> None:
+        settings = self._settings(tmp_path)
+        settings.export.log_level = "ERROR"
+        settings.export.save_log_to_file = False
+        page = MagicMock(id=123, title="Broken page", base_url="https://example.test")
+        page.export.side_effect = RuntimeError("sensitive raw detail")
+
+        with (
+            patch("confluence_markdown_exporter.main.get_settings", return_value=settings),
+            patch("confluence_markdown_exporter.main.LockfileManager") as mock_lockfile,
+            patch(
+                "confluence_markdown_exporter.confluence.Page.from_url",
+                return_value=page,
+            ),
+            patch("confluence_markdown_exporter.confluence.sync_removed_pages"),
+        ):
+            mock_lockfile.should_export.return_value = True
+            result = CliRunner().invoke(app, ["pages", "https://example.test/page"])
+
+        assert result.exit_code == 1
+        report = (tmp_path / "confluence-failures.json").read_text(encoding="utf-8")
+        assert "Broken page" in report
+        assert "RuntimeError" in report
+        assert "sensitive raw detail" not in report
+
+    def test_spaces_command_continues_after_one_space_fails(self, tmp_path: Path) -> None:
+        settings = self._settings(tmp_path)
+        settings.export.log_level = "ERROR"
+        settings.export.save_log_to_file = False
+        good_space = MagicMock(base_url="https://example.test")
+        first_url = "https://example.test/wiki/spaces/BAD/overview?token=secret"
+        second_url = "https://example.test/wiki/spaces/GOOD/overview"
+
+        with (
+            patch("confluence_markdown_exporter.main.get_settings", return_value=settings),
+            patch("confluence_markdown_exporter.main.LockfileManager"),
+            patch(
+                "confluence_markdown_exporter.confluence.Space.from_url",
+                side_effect=[RuntimeError("private discovery detail"), good_space],
+            ),
+            patch("confluence_markdown_exporter.confluence.sync_removed_pages") as mock_cleanup,
+        ):
+            result = CliRunner().invoke(app, ["spaces", first_url, second_url])
+
+        assert result.exit_code == 1
+        good_space.export.assert_called_once_with()
+        mock_cleanup.assert_called_once_with("https://example.test")
+        report = (tmp_path / "confluence-failures.json").read_text(encoding="utf-8")
+        assert '"category": "space"' in report
+        assert "token=secret" not in report
+        assert "private discovery detail" not in report

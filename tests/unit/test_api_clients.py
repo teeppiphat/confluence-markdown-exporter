@@ -1,6 +1,9 @@
 """Unit tests for api_clients module."""
 
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from threading import local
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -13,6 +16,7 @@ from confluence_markdown_exporter.api_clients import ApiClientFactory
 from confluence_markdown_exporter.api_clients import AuthNotConfiguredError
 from confluence_markdown_exporter.api_clients import ConfluenceRef
 from confluence_markdown_exporter.api_clients import get_confluence_instance
+from confluence_markdown_exporter.api_clients import get_thread_confluence
 from confluence_markdown_exporter.api_clients import parse_confluence_path
 from confluence_markdown_exporter.api_clients import response_hook
 from confluence_markdown_exporter.utils.app_data_store import ApiDetails
@@ -136,7 +140,6 @@ _PARSE_CONFLUENCE_PATH_CASES = [
         "/spaces/~jane.doe/overview",
         ConfluenceRef(space_key="~jane.doe"),
     ),
-
 ]
 
 
@@ -353,6 +356,49 @@ class TestGetConfluenceInstance:
         assert mock_factory.create_confluence.call_count == 1
 
 
+class TestGetThreadConfluence:
+    """Thread-local clients must not share requests sessions across workers."""
+
+    @patch("confluence_markdown_exporter.api_clients._thread_local", new_callable=local)
+    @patch("confluence_markdown_exporter.api_clients.get_confluence_instance")
+    def test_main_thread_reuses_global_client(
+        self,
+        mock_get_instance: MagicMock,
+        thread_local_store: local,
+    ) -> None:
+        assert thread_local_store is not None
+        client = object()
+        mock_get_instance.return_value = client
+
+        assert get_thread_confluence(SAMPLE_CONFLUENCE_URL) is client
+        assert get_thread_confluence(SAMPLE_CONFLUENCE_URL) is client
+        mock_get_instance.assert_called_once_with(SAMPLE_CONFLUENCE_URL)
+
+    @patch("confluence_markdown_exporter.api_clients._thread_local", new_callable=local)
+    @patch("confluence_markdown_exporter.api_clients._create_confluence_client")
+    def test_worker_threads_get_distinct_clients(
+        self,
+        mock_create_client: MagicMock,
+        thread_local_store: local,
+    ) -> None:
+        assert thread_local_store is not None
+        mock_create_client.side_effect = lambda _url: object()
+        barrier = Barrier(2)
+
+        def get_client_pair() -> tuple[object, object]:
+            first = get_thread_confluence(SAMPLE_CONFLUENCE_URL)
+            barrier.wait(timeout=5)
+            return first, get_thread_confluence(SAMPLE_CONFLUENCE_URL)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pairs = list(executor.map(lambda _index: get_client_pair(), range(2)))
+
+        assert pairs[0][0] is pairs[0][1]
+        assert pairs[1][0] is pairs[1][1]
+        assert pairs[0][0] is not pairs[1][0]
+        assert mock_create_client.call_count == 2
+
+
 class TestAuthConfigContextPath:
     """Test auth lookup for instances deployed under a context path (e.g. /confluence)."""
 
@@ -377,9 +423,7 @@ class TestAuthConfigContextPath:
             ("https://host.example.com:8443", "https://host.example.com:8443/confluence"),
         ],
     )
-    def test_get_instance_matches_context_path_url(
-        self, stored_key: str, lookup_url: str
-    ) -> None:
+    def test_get_instance_matches_context_path_url(self, stored_key: str, lookup_url: str) -> None:
         config = self._make_config(stored_key)
         assert config.get_instance(lookup_url) is not None
 

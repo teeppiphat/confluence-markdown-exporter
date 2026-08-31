@@ -350,6 +350,16 @@ Name of the lock file used to track exported pages.
 - Default: `confluence-lock.json`
 - ENV Var: `CME_EXPORT__LOCKFILE_NAME`
 
+### export.failure_report_name
+
+Name of the sanitized JSON report written to `export.output_path` when pages or
+attachments fail. The report contains identifiers, titles, exception types, and HTTP
+status codes where available; it does not include credentials, response bodies, or raw
+exception messages. A successful export removes a stale report from an earlier run.
+
+- Default: `confluence-failures.json`
+- ENV Var: `CME_EXPORT__FAILURE_REPORT_NAME`
+
 ### export.existence_check_batch_size
 
 Number of page IDs per batch when checking page existence during cleanup. Capped at 25 for self-hosted (CQL).

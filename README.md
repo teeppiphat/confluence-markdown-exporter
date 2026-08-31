@@ -50,6 +50,39 @@ curl -LsSf uvx.sh/confluence-markdown-exporter/5.4.0/install.sh | sh
 
 Alternative install methods (PyPI via `pip` / `uv`, prebuilt Docker image) are covered in the [installation docs](https://spenhouet.github.io/confluence-markdown-exporter/installation) and the [Docker page](https://spenhouet.github.io/confluence-markdown-exporter/docker).
 
+#### Install this source checkout
+
+The commands above install the latest published release. To run the code in this
+repository, clone it and install the checkout directly:
+
+```bash
+git clone https://github.com/teeppiphat/confluence-markdown-exporter.git
+cd confluence-markdown-exporter
+uv tool install --force .
+cme --help
+```
+
+This creates an isolated installation from the current checkout, including local
+changes. Re-run `uv tool install --force .` after changing the source. For development,
+use an editable project environment instead:
+
+```bash
+uv sync --group dev
+uv run cme --help
+uv run pytest -q
+```
+
+After a branch or commit has been pushed, it can also be installed without a local
+checkout. Pin a commit SHA for a reproducible installation:
+
+```bash
+uv tool install --force \
+  "git+https://github.com/teeppiphat/confluence-markdown-exporter.git@<commit-sha>"
+```
+
+Installing from Git only includes committed and pushed changes; it cannot include an
+uncommitted working tree.
+
 > **Using the Docker image?** Steps 2 and 3 below use the local `cme` CLI. Inside the Docker image there is no interactive `cme config` menu; you supply a pre-defined config (mounted JSON file or `CME_*` environment variables) and run a single export command per container invocation. See the [Docker page](https://spenhouet.github.io/confluence-markdown-exporter/docker) for the non-interactive flow.
 
 ### 2. Authenticate
@@ -79,6 +112,10 @@ cme orgs <base-url>
 ```
 
 Output goes to the configured `export.output_path` (current directory by default).
+If any page or attachment fails, the command exits with status `1` and writes a
+sanitized `confluence-failures.json` report in that output directory. Successful
+pages remain available and are skipped on the next run, allowing the failed work to
+be retried.
 
 ## Documentation
 

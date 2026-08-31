@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import tempfile
 from pathlib import Path
 
 from confluence_markdown_exporter.utils.app_data_store import get_settings
@@ -50,17 +51,38 @@ def parse_encode_setting(encode_setting: str) -> dict[str, str]:
 
 
 def save_file(file_path: Path, content: str | bytes) -> None:
-    """Save content to a file, creating parent directories as needed."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(content, bytes):
-        with file_path.open("wb") as file:
-            file.write(content)
-    elif isinstance(content, str):
-        with file_path.open("w", encoding="utf-8") as file:
-            file.write(content)
-    else:
+    """Atomically save content to a file, creating parent directories as needed.
+
+    Content is written to a temporary file in the destination directory and
+    moved into place only after the complete payload has been flushed.  A
+    failed or interrupted write therefore cannot leave a partially-written
+    destination file behind.
+    """
+    if not isinstance(content, str | bytes):
         msg = "Content must be either a string or bytes."
         raise TypeError(msg)
+
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        binary = isinstance(content, bytes)
+        with tempfile.NamedTemporaryFile(
+            mode="wb" if binary else "w",
+            dir=file_path.parent,
+            prefix=f".{file_path.name}.",
+            suffix=".tmp",
+            delete=False,
+            encoding=None if binary else "utf-8",
+        ) as file:
+            tmp_path = Path(file.name)
+            file.write(content)
+            file.flush()
+        tmp_path.replace(file_path)
+    except BaseException:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
+
     logger.debug("Saved file %s (%d bytes)", file_path, len(content))
 
 
@@ -146,8 +168,8 @@ def github_heading_slug(text: str) -> str:
     """
     text = text.lower().strip()
     text = re.sub(r"[^\w\s-]", "", text)  # drop punctuation; keep letters, digits, spaces, hyphens
-    text = re.sub(r"[\s_]+", "-", text)   # whitespace/underscores → hyphens
-    return re.sub(r"-{2,}", "-", text)    # collapse runs of hyphens (e.g. "- word" → "-word")
+    text = re.sub(r"[\s_]+", "-", text)  # whitespace/underscores → hyphens
+    return re.sub(r"-{2,}", "-", text)  # collapse runs of hyphens (e.g. "- word" → "-word")
 
 
 def escape_character_class(s: str) -> str:

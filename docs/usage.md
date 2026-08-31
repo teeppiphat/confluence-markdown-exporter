@@ -85,3 +85,16 @@ output_path/
             ├── My nested Confluence Page.md
             └── Another one.md
 ```
+
+## Partial failures and exit status
+
+Page exports continue independently when one page fails. If any page or attachment
+fails, the command exits with status `1` after the remaining work finishes and writes
+`confluence-failures.json` in the configured output directory. The report contains
+sanitized identifiers and error types, but no credentials, response bodies, or raw
+exception messages.
+
+Re-run the same export command to retry failed work. Pages recorded as complete in
+`confluence-lock.json` are skipped, while failed or incomplete pages are attempted
+again. A fully successful run exits with status `0` and removes a stale failure report
+from an earlier run.

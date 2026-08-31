@@ -70,7 +70,6 @@ from confluence_markdown_exporter.utils.page_registry import PageTitleRegistry
 from confluence_markdown_exporter.utils.rich_console import ExportStats
 from confluence_markdown_exporter.utils.rich_console import console
 from confluence_markdown_exporter.utils.rich_console import get_stats
-from confluence_markdown_exporter.utils.rich_console import reset_stats
 from confluence_markdown_exporter.utils.table_converter import _MAX_TABLE_LINE_LEN
 from confluence_markdown_exporter.utils.table_converter import TableConverter
 from confluence_markdown_exporter.utils.table_converter import normalize_table_cell_text
@@ -577,7 +576,18 @@ class Organization(BaseModel):
                     f"[dim]Fetching pages for space [highlight]{space.name}[/highlight]"
                     f" ({i}/{n})…[/dim]"
                 )
-                all_pages.extend(space.pages)
+                try:
+                    all_pages.extend(space.pages)
+                except Exception as e:
+                    logger.exception("Failed to discover pages for space '%s'", space.key)
+                    stats = get_stats()
+                    stats.inc_scopes_failed()
+                    stats.record_failure(
+                        category="space-discovery",
+                        identifier=space.key,
+                        title=space.name,
+                        error_type=type(e).__name__,
+                    )
         logger.info("Discovered %d page(s) across %d space(s)", len(all_pages), n)
         export_pages(all_pages)
 
@@ -829,12 +839,13 @@ class Attachment(Document):
         logger.debug("Found %d attachment(s) for page id=%s", len(attachments), page_id)
         return attachments
 
-    def export(self) -> None:
+    def export(self, *, overwrite: bool = False) -> bool:
+        """Download this attachment and report whether it was saved successfully."""
         stats = get_stats()
         filepath = settings.export.output_path / self.export_path
-        if filepath.exists():
+        if filepath.exists() and not overwrite:
             logger.debug("Skipping attachment '%s' — already exists at %s", self.title, filepath)
-            return
+            return True
 
         logger.debug("Downloading attachment '%s' to %s", self.title, filepath)
         client = get_thread_confluence(self.base_url)
@@ -846,18 +857,33 @@ class Attachment(Document):
                 advanced_mode=True,
             )
             response.raise_for_status()  # Raise error if request fails
-        except HTTPError:
+        except HTTPError as e:
             logger.warning("There is no attachment with title '%s'. Skipping export.", self.title)
             stats.inc_attachments_failed()
-            return
+            status_code = e.response.status_code if e.response is not None else None
+            stats.record_failure(
+                category="attachment",
+                identifier=str(self.id),
+                title=self.title,
+                error_type=type(e).__name__,
+                status_code=status_code,
+            )
+            return False
         except RequestException as e:
             logger.warning("Failed to download attachment '%s': %s. Skipping.", self.title, e)
             stats.inc_attachments_failed()
-            return
+            stats.record_failure(
+                category="attachment",
+                identifier=str(self.id),
+                title=self.title,
+                error_type=type(e).__name__,
+            )
+            return False
 
         save_file(filepath, response.content)
         logger.debug("Saved attachment '%s' (%d bytes)", self.title, len(response.content))
         stats.inc_attachments_exported()
+        return True
 
 
 class Ancestor(Document):
@@ -1284,7 +1310,7 @@ class Page(Document):
                 a.filename.endswith((".drawio.png", ".drawio"))
                 and a.title.replace(" ", "%20") in self.body_export
             )
-            or a.file_id in bodies
+            or bool(a.file_id and a.file_id in bodies)
             or a.id in bodies
             or a.title in bodies
             or a.title.replace(" ", "%20") in bodies
@@ -1298,6 +1324,7 @@ class Page(Document):
         new_entries: dict[str, AttachmentEntry] = {}
         output_path = settings.export.output_path
         stats = get_stats()
+        failed_titles: list[str] = []
 
         for attachment in self._attachments_for_export():
             att_id = attachment.id
@@ -1314,11 +1341,20 @@ class Page(Document):
                     stats.inc_attachments_skipped()
                     continue
 
-            attachment.export()
-            if att_version:
+            # The caller already handled the only valid skip case above. Any
+            # other existing file is stale or untracked and must be replaced.
+            exported = attachment.export(overwrite=True)
+            if exported and att_version:
                 new_entries[att_id] = AttachmentEntry(
                     version=att_version, path=str(attachment.export_path)
                 )
+            elif not exported:
+                failed_titles.append(attachment.title)
+
+        if failed_titles:
+            titles = ", ".join(repr(title) for title in failed_titles)
+            msg = f"Failed to export {len(failed_titles)} attachment(s): {titles}"
+            raise RuntimeError(msg)
 
         # Clean up orphaned attachment files when an attachment was re-versioned
         for att_id, old_entry in old_entries.items():
@@ -3500,7 +3536,8 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
     pages_to_export = [page for page in pages if LockfileManager.should_export(page)]
 
     skipped_count = len(pages) - len(pages_to_export)
-    stats = reset_stats(total=len(pages))
+    stats = get_stats()
+    stats.add_total(len(pages))
     for _ in range(skipped_count):
         stats.inc_skipped()
 
@@ -3529,9 +3566,15 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
                 progress.update(task, description=f"[cyan]Page {page.id}[/cyan]")
                 try:
                     _export_page_worker(page, stats)
-                except Exception:
+                except Exception as e:
                     logger.exception("Failed to export page %s", page.id)
                     stats.inc_failed()
+                    stats.record_failure(
+                        category="page",
+                        identifier=str(page.id),
+                        title=page.title,
+                        error_type=type(e).__name__,
+                    )
                 finally:
                     progress.advance(task)
         else:
@@ -3544,8 +3587,14 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
                     page = futures[future]
                     try:
                         future.result()
-                    except Exception:
+                    except Exception as e:
                         logger.exception("Failed to export page %s", page.id)
                         stats.inc_failed()
+                        stats.record_failure(
+                            category="page",
+                            identifier=str(page.id),
+                            title=page.title,
+                            error_type=type(e).__name__,
+                        )
                     finally:
                         progress.advance(task)
