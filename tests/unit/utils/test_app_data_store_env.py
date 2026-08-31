@@ -35,6 +35,12 @@ class TestEnvVarOverrides:
             settings = get_settings()
         assert settings.connection_config.max_workers == 3
 
+    def test_space_workers_env_override(self) -> None:
+        """CME_CONNECTION_CONFIG__SPACE_WORKERS controls organization discovery."""
+        with patch.dict(os.environ, {"CME_CONNECTION_CONFIG__SPACE_WORKERS": "2"}):
+            settings = get_settings()
+        assert settings.connection_config.space_workers == 2
+
     def test_verify_ssl_env_override_false(self) -> None:
         """CME_CONNECTION_CONFIG__VERIFY_SSL=false sets verify_ssl to False."""
         with patch.dict(os.environ, {"CME_CONNECTION_CONFIG__VERIFY_SSL": "false"}):

@@ -579,7 +579,12 @@ class TestOrganizationIsolation:
         )
         reset_stats()
 
-        with patch("confluence_markdown_exporter.confluence.export_pages") as mock_export_pages:
+        with (
+            patch("confluence_markdown_exporter.confluence.export_pages") as mock_export_pages,
+            patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
+        ):
+            mock_settings.connection_config.space_workers = 2
+            mock_settings.export.log_level = "INFO"
             org.export()
 
         mock_export_pages.assert_called_once_with([page])
@@ -587,6 +592,36 @@ class TestOrganizationIsolation:
         assert stats.scopes_failed == 1
         assert stats.failure_snapshot()[0].category == "space-discovery"
         assert stats.failure_snapshot()[0].identifier == "BAD"
+
+    def test_discovers_multiple_spaces_in_parallel(self) -> None:
+        import threading
+
+        barrier = threading.Barrier(2, timeout=2)
+
+        class FakeSpace:
+            def __init__(self, key: str) -> None:
+                self.key = key
+                self.name = key
+
+            @property
+            def pages(self) -> list[MagicMock]:
+                barrier.wait()
+                return [MagicMock(id=self.key, title=self.key)]
+
+        org = Organization.model_construct(
+            base_url="https://example.test",
+            spaces=[FakeSpace("ONE"), FakeSpace("TWO")],
+        )
+
+        with (
+            patch("confluence_markdown_exporter.confluence.export_pages") as mock_export_pages,
+            patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
+        ):
+            mock_settings.connection_config.space_workers = 2
+            mock_settings.export.log_level = "INFO"
+            org.export()
+
+        assert mock_export_pages.call_count == 2
 
 
 class TestTransformErrorImg:

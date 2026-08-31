@@ -568,30 +568,50 @@ class Organization(BaseModel):
         return [page for space in self.spaces for page in space.pages]
 
     def export(self) -> None:
-        """Export all pages across all spaces, showing per-space discovery progress."""
-        all_pages: list[Page | Descendant] = []
+        """Discover spaces concurrently and export each completed page set."""
         n = len(self.spaces)
         logger.info("Exporting %d space(s) from %s", n, self.base_url)
-        with console.status("", spinner="dots") as status:
-            for i, space in enumerate(self.spaces, 1):
-                status.update(
-                    f"[dim]Fetching pages for space [highlight]{space.name}[/highlight]"
-                    f" ({i}/{n})…[/dim]"
-                )
+        discovery_workers = settings.connection_config.space_workers
+        serial = settings.export.log_level == "DEBUG" or discovery_workers <= 1
+
+        def handle_result(space: Space, pages: list[Page | Descendant]) -> None:
+            logger.info("Discovered %d page(s) in space '%s'", len(pages), space.name)
+            export_pages(pages)
+
+        def handle_error(space: Space, error: Exception) -> None:
+            logger.exception(
+                "Failed to discover pages for space '%s'",
+                space.key,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            stats = get_stats()
+            stats.inc_scopes_failed()
+            stats.record_failure(
+                category="space-discovery",
+                identifier=space.key,
+                title=space.name,
+                error_type=type(error).__name__,
+            )
+
+        if serial:
+            for space in self.spaces:
                 try:
-                    all_pages.extend(space.pages)
-                except Exception as e:
-                    logger.exception("Failed to discover pages for space '%s'", space.key)
-                    stats = get_stats()
-                    stats.inc_scopes_failed()
-                    stats.record_failure(
-                        category="space-discovery",
-                        identifier=space.key,
-                        title=space.name,
-                        error_type=type(e).__name__,
-                    )
-        logger.info("Discovered %d page(s) across %d space(s)", len(all_pages), n)
-        export_pages(all_pages)
+                    handle_result(space, space.pages)
+                except Exception as error:  # noqa: BLE001
+                    handle_error(space, error)
+            return
+
+        logger.info("Discovering spaces in parallel (%d workers)", discovery_workers)
+        with ThreadPoolExecutor(max_workers=discovery_workers) as executor:
+            futures = {
+                executor.submit(lambda item=space: item.pages): space for space in self.spaces
+            }
+            for future in as_completed(futures):
+                space = futures[future]
+                try:
+                    handle_result(space, future.result())
+                except Exception as error:  # noqa: BLE001
+                    handle_error(space, error)
 
     @classmethod
     def from_json(cls, data: JsonResponse, base_url: str) -> "Organization":

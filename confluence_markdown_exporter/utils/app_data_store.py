@@ -103,11 +103,24 @@ class ConnectionConfig(AtlassianSdkConnectionConfig):
     )
     max_workers: int = Field(
         default=20,
+        ge=1,
+        le=64,
         title="Max Workers",
         description=(
             "Maximum number of parallel workers for page export. "
             "Set to 1 for serial mode (useful for debugging). "
             "Higher values improve performance but may hit API rate limits."
+        ),
+    )
+    space_workers: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        title="Space Discovery Workers",
+        description=(
+            "Maximum number of spaces whose page trees are discovered in parallel during "
+            "organization exports. Set to 1 for serial discovery. Keep this lower than "
+            "max_workers to reduce API pressure on large Confluence instances."
         ),
     )
 
