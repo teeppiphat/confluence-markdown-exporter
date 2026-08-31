@@ -66,6 +66,8 @@ from confluence_markdown_exporter.utils.export import sanitize_key
 from confluence_markdown_exporter.utils.export import save_file
 from confluence_markdown_exporter.utils.lockfile import AttachmentEntry
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
+from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
+from confluence_markdown_exporter.utils.output_safety import resolve_output_path
 from confluence_markdown_exporter.utils.page_registry import PageTitleRegistry
 from confluence_markdown_exporter.utils.rich_console import ExportStats
 from confluence_markdown_exporter.utils.rich_console import console
@@ -842,7 +844,11 @@ class Attachment(Document):
     def export(self, *, overwrite: bool = False) -> bool:
         """Download this attachment and report whether it was saved successfully."""
         stats = get_stats()
-        filepath = settings.export.output_path / self.export_path
+        filepath = OutputPathRegistry.reserve(
+            settings.export.output_path,
+            self.export_path,
+            f"attachment:{self.id}",
+        )
         if filepath.exists() and not overwrite:
             logger.debug("Skipping attachment '%s' — already exists at %s", self.title, filepath)
             return True
@@ -1068,29 +1074,37 @@ class Page(Document):
     def export_body(self) -> None:
         soup = BeautifulSoup(self.html, "html.parser")
         save_file(
-            settings.export.output_path
-            / self.export_path.parent
-            / f"{self.export_path.stem}_body_view.html",
+            OutputPathRegistry.reserve(
+                settings.export.output_path,
+                self.export_path.parent / f"{self.export_path.stem}_body_view.html",
+                f"page:{self.id}:body-view",
+            ),
             str(soup.prettify()),
         )
         soup = BeautifulSoup(self.body_export, "html.parser")
         save_file(
-            settings.export.output_path
-            / self.export_path.parent
-            / f"{self.export_path.stem}_body_export_view.html",
+            OutputPathRegistry.reserve(
+                settings.export.output_path,
+                self.export_path.parent / f"{self.export_path.stem}_body_export_view.html",
+                f"page:{self.id}:body-export-view",
+            ),
             str(soup.prettify()),
         )
         save_file(
-            settings.export.output_path
-            / self.export_path.parent
-            / f"{self.export_path.stem}_body_editor2.xml",
+            OutputPathRegistry.reserve(
+                settings.export.output_path,
+                self.export_path.parent / f"{self.export_path.stem}_body_editor2.xml",
+                f"page:{self.id}:body-editor2",
+            ),
             str(self.editor2),
         )
 
     def export_markdown(self) -> None:
         conv = self.Converter(self)
         save_file(
-            settings.export.output_path / self.export_path,
+            OutputPathRegistry.reserve(
+                settings.export.output_path, self.export_path, f"page:{self.id}:markdown"
+            ),
             conv.markdown,
         )
         self._marked_texts: dict[str, str] = conv._marked_texts
@@ -1202,9 +1216,11 @@ class Page(Document):
             self._render_page_comments(lines, page)
 
         save_file(
-            settings.export.output_path
-            / self.export_path.parent
-            / f"{self.export_path.stem}.comments.md",
+            OutputPathRegistry.reserve(
+                settings.export.output_path,
+                self.export_path.parent / f"{self.export_path.stem}.comments.md",
+                f"page:{self.id}:comments",
+            ),
             "\n".join(lines),
         )
 
@@ -1333,7 +1349,9 @@ class Page(Document):
             # Skip download if the same attachment version is tracked and the file still exists
             if att_id in old_entries:
                 old = old_entries[att_id]
-                if old.version == att_version and (output_path / old.path).exists():
+                if old.version == att_version and resolve_output_path(
+                    output_path, old.path
+                ).exists():
                     new_entries[att_id] = old
                     logger.debug(
                         "Skipping unchanged attachment '%s' (v%d)", attachment.title, att_version
@@ -1359,7 +1377,7 @@ class Page(Document):
         # Clean up orphaned attachment files when an attachment was re-versioned
         for att_id, old_entry in old_entries.items():
             if att_id in new_entries and old_entry.path != new_entries[att_id].path:
-                old_file = output_path / old_entry.path
+                old_file = resolve_output_path(output_path, old_entry.path)
                 old_file.unlink(missing_ok=True)
                 logger.info("Deleted old attachment file: %s", old_entry.path)
                 stats.inc_attachments_removed()
@@ -2671,7 +2689,9 @@ class Page(Document):
             if len(drawio_attachments) == 0:
                 return None
 
-            drawio_filepath = settings.export.output_path / drawio_attachments[0].export_path
+            drawio_filepath = resolve_output_path(
+                settings.export.output_path, drawio_attachments[0].export_path
+            )
             if not drawio_filepath.exists():
                 return None
 

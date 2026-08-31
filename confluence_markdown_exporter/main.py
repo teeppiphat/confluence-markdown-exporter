@@ -1,13 +1,17 @@
+import functools
 import json
 import logging
 import platform
 import sys
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Annotated
+from typing import ParamSpec
+from typing import TypeVar
 
 import typer
 import typer.rich_utils
@@ -22,6 +26,9 @@ from confluence_markdown_exporter.utils.app_data_store import get_settings
 from confluence_markdown_exporter.utils.export import save_file
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.measure_time import measure
+from confluence_markdown_exporter.utils.output_safety import OutputLockError
+from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
+from confluence_markdown_exporter.utils.output_safety import acquire_output_lock
 from confluence_markdown_exporter.utils.rich_console import ExportStats
 from confluence_markdown_exporter.utils.rich_console import console
 from confluence_markdown_exporter.utils.rich_console import get_rich_console
@@ -32,6 +39,8 @@ from confluence_markdown_exporter.utils.rich_console import setup_logging
 typer.rich_utils._get_rich_console = get_rich_console
 
 logger = logging.getLogger(__name__)
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 class _CmeTyper(typer.Typer):
@@ -61,6 +70,9 @@ class _CmeTyper(typer.Typer):
                 f"[red bold]{e}[/red bold]\n"
                 "See [code]--help[/code] or [code]README.md[/code] for more information."
             )
+            sys.exit(1)
+        except OutputLockError as e:
+            console.print(f"[red bold]{e}[/red bold]")
             sys.exit(1)
 
 
@@ -106,6 +118,18 @@ app = _CmeTyper(
     epilog=_QUICKSTART_EPILOG,
 )
 app.add_typer(config_module.app, name="config")
+
+
+def _with_output_lock(func: Callable[P, R]) -> Callable[P, R]:
+    """Serialize writers targeting the same output directory."""
+
+    @functools.wraps(func)
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        OutputPathRegistry.reset()
+        with acquire_output_lock(get_settings().export.output_path):
+            return func(*args, **kwargs)
+
+    return wrapped
 
 
 def _init_logging() -> None:
@@ -177,7 +201,11 @@ def _write_failure_report() -> Path | None:
     """Write a sanitized JSON failure report, or remove a stale successful-run report."""
     stats = get_stats()
     settings = get_settings()
-    report_path = settings.export.output_path / settings.export.failure_report_name
+    report_path = OutputPathRegistry.reserve(
+        settings.export.output_path,
+        settings.export.failure_report_name,
+        "system:failure-report",
+    )
     failures = stats.failure_snapshot()
     has_failures = bool(stats.failed or stats.scopes_failed or stats.attachments_failed or failures)
 
@@ -248,6 +276,7 @@ def _record_scope_failure(category: str, url: str, error: Exception) -> None:
         "---\n\n" + _PAGE_URL_FORMATS
     ),
 )
+@_with_output_lock
 def pages(
     page_urls: Annotated[
         list[str],
@@ -345,6 +374,7 @@ app.command(
         "---\n\n" + _PAGE_URL_FORMATS
     ),
 )
+@_with_output_lock
 def pages_with_descendants(
     page_urls: Annotated[
         list[str],
@@ -417,6 +447,7 @@ app.command(
         "---\n\n" + _SPACE_URL_FORMATS
     ),
 )
+@_with_output_lock
 def spaces(
     space_urls: Annotated[
         list[str],
@@ -487,6 +518,7 @@ app.command(
         "- `cme org URL` — singular alias, identical behaviour\n\n"
     ),
 )
+@_with_output_lock
 def orgs(
     base_urls: Annotated[
         list[str],

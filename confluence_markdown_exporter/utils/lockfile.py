@@ -16,6 +16,9 @@ from pydantic import BaseModel
 from pydantic import Field
 from pydantic import ValidationError
 
+from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
+from confluence_markdown_exporter.utils.output_safety import UnsafeOutputPathError
+from confluence_markdown_exporter.utils.output_safety import resolve_output_path
 from confluence_markdown_exporter.utils.page_registry import PageTitleRegistry
 from confluence_markdown_exporter.utils.rich_console import get_stats
 
@@ -212,7 +215,11 @@ class LockfileManager:
             return
 
         cls._output_path = settings.export.output_path
-        cls._lockfile_path = cls._output_path / settings.export.lockfile_name
+        cls._lockfile_path = OutputPathRegistry.reserve(
+            cls._output_path,
+            settings.export.lockfile_name,
+            "system:lockfile",
+        )
         cls._lock = ConfluenceLock.load(cls._lockfile_path)
         cls._all_entries_snapshot = dict(cls._lock.all_pages())
         cls._seen_page_ids = set()
@@ -288,10 +295,18 @@ class LockfileManager:
                 entry.export_path,
                 *(attachment.path for attachment in entry.attachments.values()),
             ]
-            missing_path = next(
-                (path for path in artifact_paths if not (cls._output_path / path).exists()),
-                None,
-            )
+            try:
+                missing_path = next(
+                    (
+                        path
+                        for path in artifact_paths
+                        if not resolve_output_path(cls._output_path, path).exists()
+                    ),
+                    None,
+                )
+            except UnsafeOutputPathError:
+                logger.warning("Unsafe artifact path in lockfile for page id=%s", page_id)
+                missing_path = "<unsafe lockfile path>"
             if missing_path is not None:
                 logger.debug(
                     "Page id=%s exported artifact missing at %s — will re-export",
@@ -321,6 +336,20 @@ class LockfileManager:
         return set(cls._lock.all_pages().keys()) - cls._seen_page_ids
 
     @classmethod
+    def _safe_unlink(cls, path: str, *, description: str) -> bool:
+        """Delete one tracked artifact only when it remains under the output root."""
+        if cls._output_path is None:
+            return False
+        try:
+            resolved = resolve_output_path(cls._output_path, path)
+        except UnsafeOutputPathError:
+            logger.warning("Refusing to delete unsafe %s path: %s", description, path)
+            return False
+        resolved.unlink(missing_ok=True)
+        logger.info("Deleted %s: %s", description, path)
+        return True
+
+    @classmethod
     def remove_pages(cls, deleted_ids: set[str]) -> None:
         """Remove files and lockfile entries for moved or deleted pages.
 
@@ -338,15 +367,12 @@ class LockfileManager:
                 old_entry = cls._all_entries_snapshot[page_id]
                 new_entry = cls._lock.get_page(page_id)
                 if new_entry and old_entry.export_path != new_entry.export_path:
-                    (cls._output_path / old_entry.export_path).unlink(missing_ok=True)
-                    logger.info("Deleted old path for moved page: %s", old_entry.export_path)
+                    cls._safe_unlink(old_entry.export_path, description="old path for moved page")
 
         # Remove files and lockfile entries for pages deleted from Confluence
         for page_id in deleted_ids:
             entry = cls._lock.get_page(page_id)
-            if entry:
-                (cls._output_path / entry.export_path).unlink(missing_ok=True)
-                logger.info("Deleted removed page: %s", entry.export_path)
+            if entry and cls._safe_unlink(entry.export_path, description="removed page"):
                 result_delete_ids.add(page_id)
 
         if result_delete_ids:

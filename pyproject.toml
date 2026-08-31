@@ -29,6 +29,7 @@ dependencies = [
     'typer',
     'python-dateutil',
     "lxml>=6.0.2",
+    "filelock>=3.20",
 ]
 
 

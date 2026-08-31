@@ -102,7 +102,7 @@ class TestLockfileManagerInit:
 
             assert LockfileManager._lock is not None
             assert LockfileManager._lock.orgs == {}
-            assert LockfileManager._lockfile_path == Path(tmp) / LOCKFILE_FILENAME
+            assert LockfileManager._lockfile_path == (Path(tmp) / LOCKFILE_FILENAME).resolve()
 
     @patch("confluence_markdown_exporter.utils.app_data_store.get_settings")
     def test_init_loads_existing_lockfile(
