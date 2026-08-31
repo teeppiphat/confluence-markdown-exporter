@@ -60,6 +60,22 @@ cme config set export.attachments_export=referenced
 
 Use `all` only when the additional time, bandwidth, and storage are intentional.
 
+### Images exist locally but do not appear in preview
+
+Check that the preview process can read both the Markdown file and its referenced image.
+Exporter builds containing commit `6476d77` created atomically written files with
+owner-only (`0600`) permissions. Upgrade to a later build; new files then use the normal
+system file mode (`0666` filtered by the process umask), while overwrites retain the
+destination's existing permission bits.
+
+Existing exports from the affected build do not need to be downloaded again. Their file
+permissions can be updated in place according to the access policy of the destination.
+For a private workstation whose normal file mode is `0644`, make the files readable with:
+
+```sh
+find /absolute/path/to/confluence-export -type f -perm 0600 -exec chmod 0644 {} +
+```
+
 ### Optional Jira enrichment stops resolving links
 
 Jira credentials are optional. When they are missing or invalid, Jira issue enrichment

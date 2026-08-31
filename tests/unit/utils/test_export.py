@@ -1,5 +1,6 @@
 """Unit tests for export module."""
 
+import stat
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -134,6 +135,29 @@ class TestSaveFile:
 
             assert file_path.read_text(encoding="utf-8") == "original"
             assert list(directory.glob(".test.txt.*.tmp")) == []
+
+    def test_atomic_write_uses_normal_file_creation_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            reference = directory / "reference.txt"
+            reference.write_text("reference", encoding="utf-8")
+            file_path = directory / "test.txt"
+
+            save_file(file_path, "content")
+
+            assert stat.S_IMODE(file_path.stat().st_mode) == stat.S_IMODE(
+                reference.stat().st_mode
+            )
+
+    def test_atomic_write_preserves_existing_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "test.txt"
+            file_path.write_text("original", encoding="utf-8")
+            file_path.chmod(0o640)
+
+            save_file(file_path, "replacement")
+
+            assert stat.S_IMODE(file_path.stat().st_mode) == 0o640
 
 
 class TestSanitizeFilename:

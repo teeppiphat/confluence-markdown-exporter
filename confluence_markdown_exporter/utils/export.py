@@ -1,9 +1,14 @@
 import json
 import logging
+import os
 import re
-import tempfile
+import secrets
+import stat
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
+from typing import BinaryIO
+from typing import TextIO
 
 from confluence_markdown_exporter.utils.app_data_store import get_settings
 
@@ -11,6 +16,42 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 export_options = settings.export
+
+
+def _open_atomic_temp(file_path: Path, *, binary: bool) -> tuple[BinaryIO | TextIO, Path]:
+    """Create a sibling temp file with normal output-file permissions.
+
+    ``NamedTemporaryFile`` intentionally creates files as ``0600``. Replacing the
+    destination with that file changes exported Markdown and attachments from the
+    normal ``0666 & umask`` mode to owner-only, which prevents preview processes
+    running under another account from reading images. ``os.open`` applies the
+    process umask just like ``Path.open``. When replacing an existing file, retain
+    its current permission bits, matching a direct write to that file.
+    """
+    previous_mode = None
+    with suppress(FileNotFoundError):
+        previous_mode = stat.S_IMODE(file_path.stat().st_mode)
+
+    for _attempt in range(10):
+        tmp_path = file_path.with_name(f".{file_path.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        except FileExistsError:
+            continue
+
+        try:
+            if previous_mode is not None:
+                tmp_path.chmod(previous_mode)
+            if binary:
+                return os.fdopen(fd, "wb"), tmp_path
+            return os.fdopen(fd, "w", encoding="utf-8"), tmp_path
+        except BaseException:
+            os.close(fd)
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+    msg = f"Could not allocate a temporary file next to {file_path}"
+    raise FileExistsError(msg)
 
 
 def parse_encode_setting(encode_setting: str) -> dict[str, str]:
@@ -66,16 +107,8 @@ def save_file(file_path: Path, content: str | bytes) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path | None = None
     try:
-        binary = isinstance(content, bytes)
-        with tempfile.NamedTemporaryFile(
-            mode="wb" if binary else "w",
-            dir=file_path.parent,
-            prefix=f".{file_path.name}.",
-            suffix=".tmp",
-            delete=False,
-            encoding=None if binary else "utf-8",
-        ) as file:
-            tmp_path = Path(file.name)
+        file, tmp_path = _open_atomic_temp(file_path, binary=isinstance(content, bytes))
+        with file:
             file.write(content)
             file.flush()
         tmp_path.replace(file_path)
@@ -107,14 +140,8 @@ def save_stream(file_path: Path, chunks: Iterable[bytes], *, expected_size: int 
     tmp_path: Path | None = None
     written = 0
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=file_path.parent,
-            prefix=f".{file_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as file:
-            tmp_path = Path(file.name)
+        file, tmp_path = _open_atomic_temp(file_path, binary=True)
+        with file:
             for chunk in chunks:
                 if not chunk:
                     continue
