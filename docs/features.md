@@ -17,6 +17,8 @@ Exports individual pages, pages with descendants, or entire spaces via the Atlas
 - **Large attachments**: streams downloads in 1 MiB chunks instead of loading the whole
   file into memory and verifies the advertised byte size before replacing a file
 - **Integrity manifest**: records each exported artifact's byte size and SHA-256 digest
+- **Space inventory**: follows API pagination and lists every current or archived space
+  type returned by Confluence as a table, JSON, or CSV for backup and migration planning
 - **Output protection**: rejects path collisions and prevents two exporter processes from
   writing to the same output directory at once
 

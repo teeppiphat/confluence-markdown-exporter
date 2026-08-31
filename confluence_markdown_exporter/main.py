@@ -1,4 +1,6 @@
+import csv
 import functools
+import io
 import json
 import logging
 import platform
@@ -12,7 +14,9 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Annotated
+from typing import Literal
 from typing import ParamSpec
+from typing import Protocol
 from typing import TypeVar
 
 import typer
@@ -87,6 +91,7 @@ _QUICKSTART_EPILOG = (
     "- Set output path: `cme config set export.output_path=./output`\n\n"
     "- Export a page: `cme pages https://company.atlassian.net/wiki/spaces/KEY/pages/123/Title`\n\n"
     "- Export a space: `cme spaces https://company.atlassian.net/wiki/spaces/MYSPACE`\n\n"
+    "- Inventory spaces: `cme list-spaces https://company.atlassian.net --format json`\n\n"
     "- Export everything: `cme orgs https://company.atlassian.net`\n\n"
     "- Each command also has a singular alias"
     " (`page`, `space`, `org`) that behaves identically.\n\n"
@@ -570,10 +575,150 @@ app.command(
 )(spaces)
 
 
+class _SpaceInventorySource(Protocol):
+    key: str
+    name: str
+    type: str
+    status: str
+    homepage: int | None
+    description: str
+
+
+def _space_inventory_record(
+    base_url: str, space: _SpaceInventorySource
+) -> dict[str, str | int | None]:
+    """Build a stable, migration-friendly record from a Space model."""
+    key = str(space.key)
+    parsed = urllib.parse.urlparse(base_url)
+    cloud = (parsed.hostname or "").endswith("atlassian.net") or "/ex/confluence/" in parsed.path
+    route = "wiki/spaces" if cloud else "display"
+    space_url = f"{base_url.rstrip('/')}/{route}/{urllib.parse.quote(key, safe='')}"
+    return {
+        "base_url": _safe_retry_url(base_url),
+        "key": key,
+        "name": str(space.name),
+        "type": str(space.type),
+        "status": str(space.status),
+        "homepage_id": space.homepage,
+        "description": str(space.description),
+        "space_url": space_url,
+    }
+
+
+def _render_space_inventory_csv(records: list[dict[str, str | int | None]]) -> str:
+    """Serialize inventory records as RFC-compatible CSV text."""
+    output = io.StringIO(newline="")
+    fieldnames = [
+        "base_url",
+        "key",
+        "name",
+        "type",
+        "status",
+        "homepage_id",
+        "description",
+        "space_url",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(records)
+    return output.getvalue()
+
+
+@app.command(
+    name="list-spaces",
+    help=(
+        "List **all Confluence spaces** for backup and migration inventory.\n\n"
+        "Pagination is followed until every space is collected, including personal and "
+        "archived spaces returned by the instance. Use JSON or CSV for automation. "
+        "This command reads metadata only and does not export page content."
+    ),
+    epilog=(
+        "**Examples:**\n\n"
+        "- `cme list-spaces https://company.atlassian.net` — human-readable table\n\n"
+        "- `cme list-spaces https://company.atlassian.net --format json "
+        "--output spaces.json`\n\n"
+        "- `cme list-spaces https://company.atlassian.net --format csv "
+        "--output spaces.csv`\n\n"
+        "---\n\n"
+        "After reviewing the inventory, use `cme orgs BASE_URL` to export all current "
+        "global spaces, or `cme spaces SPACE_URL...` for selected inventory entries.\n\n"
+    ),
+)
+def list_spaces(
+    base_urls: Annotated[
+        list[str],
+        typer.Argument(
+            help="One or more Confluence instance base URLs.",
+            metavar="BASE_URL",
+        ),
+    ],
+    output_format: Annotated[
+        Literal["table", "json", "csv"],
+        typer.Option("--format", "-f", help="Output format."),
+    ] = "table",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write JSON or CSV inventory to this file."),
+    ] = None,
+) -> None:
+    """List every space exposed by the Confluence space collection API."""
+    from confluence_markdown_exporter.confluence import Organization
+
+    _init_logging()
+    records: list[dict[str, str | int | None]] = []
+    for supplied_url in base_urls:
+        base_url = _safe_retry_url(supplied_url).rstrip("/")
+        org = Organization.inventory_from_url(base_url)
+        records.extend(_space_inventory_record(base_url, space) for space in org.spaces)
+
+    records.sort(key=lambda item: (str(item["base_url"]), str(item["key"])))
+    if output_format == "table":
+        if output is not None:
+            msg = "--output requires --format json or --format csv"
+            raise ValueError(msg)
+        table = Table(title=f"Confluence spaces ({len(records)})")
+        table.add_column("Instance")
+        table.add_column("Key", style="highlight")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Status")
+        table.add_column("Homepage")
+        for record in records:
+            table.add_row(
+                str(record["base_url"]),
+                str(record["key"]),
+                str(record["name"]),
+                str(record["type"]),
+                str(record["status"]),
+                str(record["homepage_id"] or ""),
+            )
+        console.print(table)
+        return
+
+    if output_format == "json":
+        payload = {
+            "schema_version": 1,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "space_count": len(records),
+            "spaces": records,
+        }
+        rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    else:
+        rendered = _render_space_inventory_csv(records)
+
+    if output is None:
+        typer.echo(rendered, nl=False)
+    else:
+        save_file(output.expanduser(), rendered)
+        console.print(f"Wrote {len(records)} space(s) to [highlight]{output}[/highlight]")
+
+
 @app.command(
     help=(
-        "Export **all spaces** of one or more Confluence organizations to Markdown.\n\n"
-        "Iterates over every space in the organization and exports all pages in each. "
+        "Export Confluence organization spaces to Markdown.\n\n"
+        "By default, iterates over every current global space and exports all pages. "
+        "Use `--all-spaces` for a complete backup scope including personal and archived "
+        "spaces returned by the instance. "
         "This is the broadest export scope — use `spaces` to target specific spaces, "
         "or `pages` / `pages-with-descendants` for finer-grained control.\n\n"
         "The base URL is the root of the Confluence instance, "
@@ -581,7 +726,9 @@ app.command(
     ),
     epilog=(
         "**Examples:**\n\n"
-        "- `cme orgs https://company.atlassian.net` — export everything\n\n"
+        "- `cme orgs https://company.atlassian.net` — export all current global spaces\n\n"
+        "- `cme orgs https://company.atlassian.net --all-spaces`"
+        " — include personal and archived spaces for a complete backup\n\n"
         "- `cme orgs https://company1.atlassian.net https://company2.atlassian.net`"
         " — multiple orgs\n\n"
         "- `cme org URL` — singular alias, identical behaviour\n\n"
@@ -594,12 +741,22 @@ def orgs(
         typer.Argument(
             help=(
                 "One or more Confluence base URLs (root of the instance). "
-                "All spaces and pages within each organization will be exported. "
+                "Spaces and pages in the selected backup scope will be exported. "
                 "Example: https://company.atlassian.net"
             ),
             metavar="BASE_URL",
         ),
     ],
+    all_spaces: Annotated[  # noqa: FBT002 - Typer exposes this as a CLI option
+        bool,
+        typer.Option(
+            "--all-spaces",
+            help=(
+                "Export every space returned by the complete inventory, including "
+                "personal and archived spaces. Access still depends on API permissions."
+            ),
+        ),
+    ] = False,
 ) -> None:
     from confluence_markdown_exporter.confluence import Organization
     from confluence_markdown_exporter.confluence import sync_removed_pages
@@ -611,7 +768,11 @@ def orgs(
 
         for base_url in base_urls:
             try:
-                org = Organization.from_url(base_url)
+                org = (
+                    Organization.inventory_from_url(base_url)
+                    if all_spaces
+                    else Organization.from_url(base_url)
+                )
                 org.export()
                 sync_removed_pages(base_url)
             except Exception as e:

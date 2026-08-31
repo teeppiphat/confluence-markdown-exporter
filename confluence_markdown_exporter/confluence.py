@@ -630,6 +630,55 @@ class Organization(BaseModel):
             spaces=[Space.from_json(space, base_url) for space in data.get("results", [])],
         )
 
+    @staticmethod
+    def _fetch_all_spaces(
+        base_url: str,
+        *,
+        space_type: str | None,
+        space_status: str | None,
+    ) -> list[JsonResponse]:
+        """Fetch every page of the Confluence space collection."""
+        client = get_thread_confluence(base_url)
+        results: list[JsonResponse] = []
+        seen_keys: set[str] = set()
+        start = 0
+        limit = 200
+
+        while True:
+            response = cast(
+                "JsonResponse",
+                client.get_all_spaces(
+                    start=start,
+                    limit=limit,
+                    space_type=space_type,
+                    space_status=space_status,
+                    expand="homepage,description.plain",
+                ),
+            )
+            batch = response.get("results", [])
+            if not isinstance(batch, list) or not batch:
+                break
+
+            added = 0
+            for item in batch:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item.get("key", ""))
+                if key and key in seen_keys:
+                    continue
+                if key:
+                    seen_keys.add(key)
+                results.append(item)
+                added += 1
+
+            size = int(response.get("size", len(batch)))
+            next_link = response.get("_links", {}).get("next")
+            if size <= 0 or added == 0 or (not next_link and len(batch) < limit):
+                break
+            start += size
+
+        return results
+
     @classmethod
     @functools.lru_cache(maxsize=100)
     def from_url(cls, base_url: str) -> "Organization":
@@ -637,17 +686,37 @@ class Organization(BaseModel):
         with console.status(
             f"[dim]Fetching space list from [highlight]{base_url}[/highlight]…[/dim]"
         ):
-            org = cls.from_json(
-                cast(
-                    "JsonResponse",
-                    get_thread_confluence(base_url).get_all_spaces(
-                        space_type="global", space_status="current", expand="homepage"
-                    ),
-                ),
-                base_url,
+            org = cls(
+                base_url=base_url,
+                spaces=[
+                    Space.from_json(space, base_url)
+                    for space in cls._fetch_all_spaces(
+                        base_url,
+                        space_type="global",
+                        space_status="current",
+                    )
+                ],
             )
         logger.info("Found %d space(s) in %s", len(org.spaces), base_url)
         return org
+
+    @classmethod
+    def inventory_from_url(cls, base_url: str) -> "Organization":
+        """Return all spaces, including personal and archived spaces, for inventory."""
+        logger.debug("Fetching complete space inventory from %s", base_url)
+        with console.status(
+            f"[dim]Fetching complete space inventory from [highlight]{base_url}[/highlight]…[/dim]"
+        ):
+            spaces = [
+                Space.from_json(space, base_url)
+                for space in cls._fetch_all_spaces(
+                    base_url,
+                    space_type=None,
+                    space_status=None,
+                )
+            ]
+        logger.info("Found %d space(s) in %s", len(spaces), base_url)
+        return cls(base_url=base_url, spaces=spaces)
 
 
 class Space(BaseModel):
@@ -656,6 +725,8 @@ class Space(BaseModel):
     name: str
     description: str
     homepage: int | None
+    type: str = "global"
+    status: str = "current"
 
     @property
     def pages(self) -> list["Page | Descendant"]:
@@ -686,6 +757,8 @@ class Space(BaseModel):
             name=data.get("name", ""),
             description=data.get("description", {}).get("plain", {}).get("value", ""),
             homepage=data.get("homepage", {}).get("id"),
+            type=data.get("type", "global"),
+            status=data.get("status", "current"),
         )
 
     @classmethod

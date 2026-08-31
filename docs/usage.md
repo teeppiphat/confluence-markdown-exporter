@@ -4,7 +4,7 @@ title: Usage
 
 # Usage
 
-Run the exporter with the desired Confluence page URL or space URL. Execute the console application by typing `confluence-markdown-exporter` (or its shorter alias `cme`) followed by one of the commands `pages`, `pages-with-descendants`, `spaces`, `orgs`, or `config`. Add `--help` to any command for additional information.
+Run the exporter with the desired Confluence page URL or space URL. Execute the console application by typing `confluence-markdown-exporter` (or its shorter alias `cme`) followed by one of the commands `pages`, `pages-with-descendants`, `spaces`, `list-spaces`, `orgs`, or `config`. Add `--help` to any command for additional information.
 
 All export commands accept one or more URLs as space-separated arguments. Each command also has a singular alias (`page`, `page-with-descendants`, `space`, `org`) that behaves identically.
 
@@ -65,7 +65,7 @@ Supported space URL formats:
 
 ## Export all spaces of an organization
 
-Export all Confluence pages across all spaces of one or more organizations by URL:
+Export all Confluence pages across current global spaces of one or more organizations:
 
 ```sh
 cme orgs <base-url>
@@ -74,6 +74,52 @@ cme orgs <base-url-1> <base-url-2> ...
 # Singular alias (identical behaviour):
 cme org <base-url>
 ```
+
+The space collection is paginated until all current global spaces are found; exports are
+not limited to the first 50 entries returned by the SDK.
+
+## List spaces for backup and migration
+
+Create a complete space inventory before a backup or migration:
+
+```sh
+# Human-readable table
+cme list-spaces https://company.atlassian.net
+
+# Stable machine-readable inventory
+cme list-spaces https://company.atlassian.net \
+  --format json --output spaces.json
+
+# Spreadsheet/database import
+cme list-spaces https://company.atlassian.net \
+  --format csv --output spaces.csv
+```
+
+Unlike plain `orgs`, which exports current global spaces, `list-spaces` requests the
+complete collection exposed by Confluence, including archived and personal spaces. Every
+API page is followed and duplicate keys are removed. Each record contains:
+
+- instance base URL and canonical space URL;
+- space key and display name;
+- space type returned by Confluence (such as global, personal, collaboration, or
+  knowledge base) and current/archived status;
+- homepage content ID; and
+- plain-text space description.
+
+The JSON document includes `schema_version`, UTC `generated_at`, `space_count`, and the
+`spaces` array. Keep it with `confluence-manifest.json` and the exported directory as the
+inventory layer of a backup. To export selected archived or personal entries when the
+source instance permits access, pass their `space_url` values to `cme spaces`.
+
+To export every inventory entry in one backup run, opt in explicitly:
+
+```sh
+cme orgs https://company.atlassian.net --all-spaces
+```
+
+This can be much larger than a normal organization export. Archived and personal spaces
+are attempted independently; inaccessible entries are recorded in
+`confluence-failures.json` without stopping the remaining backup.
 
 ## Output layout
 

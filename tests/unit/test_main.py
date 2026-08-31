@@ -45,7 +45,14 @@ class TestAppConfiguration:
             if callback.callback is not None
         ]
 
-        expected_commands = ["pages", "pages-with-descendants", "spaces", "orgs", "version"]
+        expected_commands = [
+            "pages",
+            "pages-with-descendants",
+            "spaces",
+            "list-spaces",
+            "orgs",
+            "version",
+        ]
         for expected_command in expected_commands:
             assert expected_command in commands
 
@@ -53,6 +60,117 @@ class TestAppConfiguration:
         """Test that the config sub-app is registered as a command group."""
         group_names = [group.name for group in app.registered_groups]
         assert "config" in group_names
+
+
+class TestListSpacesCommand:
+    """Space inventory is available in machine-readable formats."""
+
+    @staticmethod
+    def _organization() -> SimpleNamespace:
+        return SimpleNamespace(
+            spaces=[
+                SimpleNamespace(
+                    key="BTT",
+                    name="Bedrock Tech Team",
+                    type="global",
+                    status="current",
+                    homepage=123,
+                    description="Engineering docs",
+                ),
+                SimpleNamespace(
+                    key="~user",
+                    name="Personal Space",
+                    type="personal",
+                    status="archived",
+                    homepage=None,
+                    description="",
+                ),
+            ]
+        )
+
+    def test_json_inventory_can_be_written_to_file(self, tmp_path: Path) -> None:
+        output = tmp_path / "spaces.json"
+        with (
+            patch("confluence_markdown_exporter.main._init_logging"),
+            patch(
+                "confluence_markdown_exporter.confluence.Organization.inventory_from_url",
+                return_value=self._organization(),
+            ) as inventory,
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "list-spaces",
+                    "https://company.atlassian.net?token=secret",
+                    "--format",
+                    "json",
+                    "--output",
+                    str(output),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        inventory.assert_called_once_with("https://company.atlassian.net")
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == 1
+        assert payload["space_count"] == 2
+        assert payload["spaces"][0]["key"] == "BTT"
+        assert payload["spaces"][1]["status"] == "archived"
+        assert "token=secret" not in output.read_text(encoding="utf-8")
+
+    def test_csv_inventory_prints_to_stdout(self) -> None:
+        with (
+            patch("confluence_markdown_exporter.main._init_logging"),
+            patch(
+                "confluence_markdown_exporter.confluence.Organization.inventory_from_url",
+                return_value=self._organization(),
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["list-spaces", "https://company.atlassian.net", "--format", "csv"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "base_url,key,name,type,status,homepage_id,description,space_url" in result.output
+        assert "BTT,Bedrock Tech Team,global,current,123" in result.output
+
+
+class TestOrganizationBackupScope:
+    """The opt-in backup scope includes every inventoried space."""
+
+    def test_all_spaces_uses_complete_inventory(self, tmp_path: Path) -> None:
+        settings = SimpleNamespace(
+            export=SimpleNamespace(
+                output_path=tmp_path,
+                log_level="ERROR",
+                save_log_to_file=False,
+            )
+        )
+        organization = MagicMock()
+
+        with (
+            patch("confluence_markdown_exporter.main.get_settings", return_value=settings),
+            patch("confluence_markdown_exporter.main.LockfileManager"),
+            patch("confluence_markdown_exporter.main._finish_export"),
+            patch(
+                "confluence_markdown_exporter.confluence.Organization.inventory_from_url",
+                return_value=organization,
+            ) as inventory,
+            patch(
+                "confluence_markdown_exporter.confluence.Organization.from_url"
+            ) as current_only,
+            patch("confluence_markdown_exporter.confluence.sync_removed_pages"),
+        ):
+            result = CliRunner().invoke(
+                app,
+                ["orgs", "https://company.atlassian.net", "--all-spaces"],
+            )
+
+        assert result.exit_code == 0, result.output
+        inventory.assert_called_once_with("https://company.atlassian.net")
+        current_only.assert_not_called()
+        organization.export.assert_called_once_with()
 
 
 class TestFailureReport:

@@ -134,7 +134,7 @@ Pick the install method that fits your environment. All methods produce the same
     ```
 
 You should see the top-level commands: `pages`, `pages-with-descendants`, `spaces`,
-`orgs`, `retry-failures`, and `config`.
+`list-spaces`, `orgs`, `retry-failures`, and `config`.
 
 ## Next steps
 

@@ -113,8 +113,14 @@ cme spaces <space-url>
 # Multiple spaces (page-tree discovery runs in parallel)
 cme spaces <space-url-1> <space-url-2> <space-url-3>
 
-# Every space of an organisation
+# Inventory every space for backup or migration
+cme list-spaces <base-url> --format json --output spaces.json
+
+# Every current global space of an organisation
 cme orgs <base-url>
+
+# Complete backup scope, including personal and archived spaces
+cme orgs <base-url> --all-spaces
 ```
 
 Output goes to the configured `export.output_path` (current directory by default).

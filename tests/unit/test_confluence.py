@@ -683,6 +683,62 @@ class TestOrganizationIsolation:
         assert mock_export_pages.call_count == 2
 
 
+class TestOrganizationSpacePagination:
+    """Space discovery must not stop at the SDK's first 50-result page."""
+
+    def test_fetch_all_spaces_follows_pagination_and_deduplicates(self) -> None:
+        client = MagicMock()
+        client.get_all_spaces.side_effect = [
+            {
+                "results": [{"key": "A"}, {"key": "B"}],
+                "size": 2,
+                "_links": {"next": "/rest/api/space?start=2"},
+            },
+            {
+                "results": [{"key": "B"}, {"key": "C"}],
+                "size": 2,
+                "_links": {},
+            },
+        ]
+
+        with patch(
+            "confluence_markdown_exporter.confluence.get_thread_confluence",
+            return_value=client,
+        ):
+            result = Organization._fetch_all_spaces(
+                "https://example.test",
+                space_type="global",
+                space_status="current",
+            )
+
+        assert [item["key"] for item in result] == ["A", "B", "C"]
+        assert client.get_all_spaces.call_args_list[0].kwargs["start"] == 0
+        assert client.get_all_spaces.call_args_list[1].kwargs["start"] == 2
+        assert all(call.kwargs["limit"] == 200 for call in client.get_all_spaces.call_args_list)
+
+    def test_inventory_requests_all_space_types_and_statuses(self) -> None:
+        response = [
+            {
+                "key": "ARCHIVE",
+                "name": "Archived",
+                "type": "global",
+                "status": "archived",
+                "homepage": {"id": "123"},
+            }
+        ]
+
+        with patch.object(Organization, "_fetch_all_spaces", return_value=response) as fetch:
+            org = Organization.inventory_from_url("https://example.test")
+
+        fetch.assert_called_once_with(
+            "https://example.test",
+            space_type=None,
+            space_status=None,
+        )
+        assert org.spaces[0].status == "archived"
+        assert org.spaces[0].homepage == 123
+
+
 class TestTransformErrorImg:
     """transform-error SVG images must resolve via data-encoded-xml."""
 
