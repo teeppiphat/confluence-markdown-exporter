@@ -13,6 +13,7 @@ import pytest
 from requests import HTTPError
 
 from confluence_markdown_exporter.confluence import Attachment
+from confluence_markdown_exporter.confluence import JiraIssue
 from confluence_markdown_exporter.confluence import Organization
 from confluence_markdown_exporter.confluence import Page
 from confluence_markdown_exporter.confluence import Space
@@ -465,9 +466,14 @@ class TestAttachmentsExportFlag:
         destination = tmp_path / att.export_path
         destination.parent.mkdir(parents=True)
         destination.write_bytes(b"existing-valid-file")
-        response = MagicMock(content=b"short")
+        response = MagicMock()
+        response.iter_content.return_value = iter([b"short"])
         client = MagicMock(url="https://example.test")
-        client.request.return_value = response
+        client.timeout = 30
+        client.verify_ssl = True
+        client.proxies = None
+        client.cert = None
+        client._session.request.return_value = response
         stats = reset_stats()
 
         with (
@@ -584,6 +590,26 @@ class TestExportPagesStats:
         stats = get_stats()
         assert stats.total == 2
         assert stats.skipped == 2
+
+
+class TestOptionalJiraEnrichment:
+    """Missing Jira credentials must not abort a Confluence export."""
+
+    def test_missing_jira_auth_returns_no_enrichment(self) -> None:
+        from confluence_markdown_exporter.api_clients import AuthNotConfiguredError
+
+        with (
+            patch("confluence_markdown_exporter.confluence.get_settings") as mock_settings,
+            patch.object(
+                JiraIssue,
+                "_fetch_cached",
+                side_effect=AuthNotConfiguredError("https://example.test", "Jira"),
+            ),
+        ):
+            mock_settings.return_value.export.enable_jira_enrichment = True
+            result = JiraIssue.from_key("ABC-1", "https://example.test")
+
+        assert result is None
 
 
 class TestOrganizationIsolation:

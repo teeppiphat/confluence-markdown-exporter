@@ -6,6 +6,20 @@ title: Features
 
 Exports individual pages, pages with descendants, or entire spaces via the Atlassian API. Skips unchanged pages by default, re-exporting only what has changed since the last run.
 
+## Reliable large exports
+
+- **Bounded concurrency**: discovers multiple spaces in parallel and exports pages with
+  separately configurable worker limits
+- **Safe resume**: writes Markdown, attachments, lock state, reports, and manifests
+  atomically; re-running the same command resumes incomplete work
+- **Targeted retry**: `cme retry-failures` replays only the scopes recorded in
+  `confluence-failures.json`
+- **Large attachments**: streams downloads in 1 MiB chunks instead of loading the whole
+  file into memory and verifies the advertised byte size before replacing a file
+- **Integrity manifest**: records each exported artifact's byte size and SHA-256 digest
+- **Output protection**: rejects path collisions and prevents two exporter processes from
+  writing to the same output directory at once
+
 ## Supported Confluence features
 
 ### Content & formatting

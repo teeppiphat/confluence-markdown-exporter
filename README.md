@@ -98,6 +98,9 @@ See [Authentication](https://spenhouet.github.io/confluence-markdown-exporter/co
 ### 3. Export
 
 ```sh
+# Keep exports separate from the source checkout
+cme config set export.output_path=./confluence-export
+
 # A single page
 cme pages <page-url>
 
@@ -107,6 +110,9 @@ cme pages-with-descendants <page-url>
 # An entire space
 cme spaces <space-url>
 
+# Multiple spaces (page-tree discovery runs in parallel)
+cme spaces <space-url-1> <space-url-2> <space-url-3>
+
 # Every space of an organisation
 cme orgs <base-url>
 ```
@@ -115,7 +121,14 @@ Output goes to the configured `export.output_path` (current directory by default
 If any page or attachment fails, the command exits with status `1` and writes a
 sanitized `confluence-failures.json` report in that output directory. Successful
 pages remain available and are skipped on the next run, allowing the failed work to
-be retried.
+be retried. Use `cme retry-failures` to replay only recorded failures, or re-run the
+original command to resume the complete scope.
+
+Attachments are streamed atomically into `<space>/attachments/`, using the unique
+Confluence attachment content ID by default. A completed run also writes
+`confluence-manifest.json` with byte sizes and SHA-256 hashes. Only one exporter may
+write to the same output directory at a time; separate output directories can run in
+parallel safely.
 
 ## Documentation
 

@@ -229,6 +229,17 @@ class LockfileManager:
                 PageTitleRegistry.register(int(pid), entry.title)
             except (TypeError, ValueError):
                 continue
+            OutputPathRegistry.reserve(
+                cls._output_path,
+                entry.export_path,
+                f"page:{pid}:markdown",
+            )
+            for attachment_id, attachment in entry.attachments.items():
+                OutputPathRegistry.reserve(
+                    cls._output_path,
+                    attachment.path,
+                    f"attachment:{attachment_id}",
+                )
         logger.debug(
             "Lockfile initialized: %s (%d tracked page(s))",
             cls._lockfile_path,

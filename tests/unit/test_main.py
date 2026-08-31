@@ -159,6 +159,9 @@ class TestFailureReport:
         settings.export.log_level = "ERROR"
         settings.export.save_log_to_file = False
         good_space = MagicMock(base_url="https://example.test")
+        good_space.name = "Good"
+        good_space.pages = [MagicMock(id=1, title="Good page")]
+        settings.connection_config = SimpleNamespace(space_workers=2)
         first_url = "https://example.test/wiki/spaces/BAD/overview?token=secret"
         second_url = "https://example.test/wiki/spaces/GOOD/overview"
 
@@ -169,12 +172,13 @@ class TestFailureReport:
                 "confluence_markdown_exporter.confluence.Space.from_url",
                 side_effect=[RuntimeError("private discovery detail"), good_space],
             ),
+            patch("confluence_markdown_exporter.confluence.export_pages") as mock_export_pages,
             patch("confluence_markdown_exporter.confluence.sync_removed_pages") as mock_cleanup,
         ):
             result = CliRunner().invoke(app, ["spaces", first_url, second_url])
 
         assert result.exit_code == 1
-        good_space.export.assert_called_once_with()
+        mock_export_pages.assert_called_once_with(good_space.pages)
         mock_cleanup.assert_called_once_with("https://example.test")
         report = (tmp_path / "confluence-failures.json").read_text(encoding="utf-8")
         assert '"category": "space"' in report

@@ -69,6 +69,16 @@ class TestEnvVarOverrides:
             settings = get_settings()
         assert settings.export.attachments_export == "all"
 
+    def test_old_default_attachment_path_migrates_to_unique_content_id(self) -> None:
+        config = ExportConfig(
+            attachment_path=(
+                "{space_name}/attachments/{attachment_file_id}{attachment_extension}"
+            )
+        )
+        assert config.attachment_path == (
+            "{space_name}/attachments/{attachment_id}{attachment_extension}"
+        )
+
     def test_comments_export_env_override(self) -> None:
         """CME_EXPORT__COMMENTS_EXPORT overrides comments_export."""
         with patch.dict(os.environ, {"CME_EXPORT__COMMENTS_EXPORT": "all"}):
@@ -262,8 +272,8 @@ class TestAttachmentPathMigration:
         assert config.attachment_path == original
 
     def test_no_attachment_title_not_changed(self) -> None:
-        """Default template without {attachment_title} is left unchanged."""
-        original = "{space_name}/attachments/{attachment_file_id}{attachment_extension}"
+        """A custom template without {attachment_title} is left unchanged."""
+        original = "{space_name}/custom/{attachment_file_id}{attachment_extension}"
         config = ExportConfig(attachment_path=original)
         assert config.attachment_path == original
 

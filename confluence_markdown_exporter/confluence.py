@@ -49,6 +49,7 @@ from rich.progress import TimeElapsedColumn
 from rich.progress import TimeRemainingColumn
 from tabulate import tabulate
 
+from confluence_markdown_exporter.api_clients import AuthNotConfiguredError
 from confluence_markdown_exporter.api_clients import JiraAuthenticationError
 from confluence_markdown_exporter.api_clients import build_gateway_url
 from confluence_markdown_exporter.api_clients import get_confluence_instance
@@ -60,10 +61,12 @@ from confluence_markdown_exporter.api_clients import parse_gateway_url
 from confluence_markdown_exporter.utils.app_data_store import get_settings
 from confluence_markdown_exporter.utils.app_data_store import normalize_instance_url
 from confluence_markdown_exporter.utils.drawio_converter import load_and_parse_drawio
+from confluence_markdown_exporter.utils.export import FileSizeMismatchError
 from confluence_markdown_exporter.utils.export import github_heading_slug
 from confluence_markdown_exporter.utils.export import sanitize_filename
 from confluence_markdown_exporter.utils.export import sanitize_key
 from confluence_markdown_exporter.utils.export import save_file
+from confluence_markdown_exporter.utils.export import save_stream
 from confluence_markdown_exporter.utils.lockfile import AttachmentEntry
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
@@ -472,7 +475,13 @@ class JiraIssue(BaseModel):
         try:
             return cls._fetch_cached(issue_key, jira_url)
         except JiraAuthenticationError:
-            handle_jira_auth_failure(jira_url)
+            try:
+                handle_jira_auth_failure(jira_url)
+            except AuthNotConfiguredError:
+                return None
+            return None
+        except AuthNotConfiguredError:
+            logger.debug("Skipping optional Jira enrichment: auth is not configured")
             return None
 
     @classmethod
@@ -876,14 +885,35 @@ class Attachment(Document):
 
         logger.debug("Downloading attachment '%s' to %s", self.title, filepath)
         client = get_thread_confluence(self.base_url)
+        response = None
         try:
-            response = client.request(
+            session = client._session
+            response = session.request(
                 method="GET",
-                path=client.url + self.download_link,
-                absolute=True,
-                advanced_mode=True,
+                url=client.url + self.download_link,
+                stream=True,
+                timeout=client.timeout,
+                verify=client.verify_ssl,
+                proxies=client.proxies,
+                cert=client.cert,
             )
-            response.raise_for_status()  # Raise error if request fails
+            response.raise_for_status()
+            written = save_stream(
+                filepath,
+                response.iter_content(chunk_size=1024 * 1024),
+                expected_size=self.file_size,
+            )
+        except FileSizeMismatchError as e:
+            logger.warning("Attachment '%s' size mismatch: %s", self.title, e)
+            stats.inc_attachments_failed()
+            stats.record_failure(
+                category="attachment",
+                identifier=str(self.id),
+                title=self.title,
+                error_type="AttachmentSizeMismatch",
+                retry_url=self._parent_page_retry_url,
+            )
+            return False
         except HTTPError as e:
             logger.warning("There is no attachment with title '%s'. Skipping export.", self.title)
             stats.inc_attachments_failed()
@@ -908,25 +938,10 @@ class Attachment(Document):
                 retry_url=self._parent_page_retry_url,
             )
             return False
-
-        if self.file_size > 0 and len(response.content) != self.file_size:
-            logger.warning(
-                "Attachment '%s' size mismatch: expected %d bytes, received %d bytes",
-                self.title,
-                self.file_size,
-                len(response.content),
-            )
-            stats.inc_attachments_failed()
-            stats.record_failure(
-                category="attachment",
-                identifier=str(self.id),
-                title=self.title,
-                error_type="AttachmentSizeMismatch",
-                retry_url=self._parent_page_retry_url,
-            )
-            return False
-        save_file(filepath, response.content)
-        logger.debug("Saved attachment '%s' (%d bytes)", self.title, len(response.content))
+        finally:
+            if response is not None:
+                response.close()
+        logger.debug("Saved attachment '%s' (%d bytes)", self.title, written)
         stats.inc_attachments_exported()
         return True
 

@@ -5,6 +5,8 @@ import platform
 import sys
 import urllib.parse
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 from dataclasses import asdict
 from datetime import datetime
 from datetime import timezone
@@ -498,22 +500,53 @@ def spaces(
     ],
 ) -> None:
     from confluence_markdown_exporter.confluence import Space
+    from confluence_markdown_exporter.confluence import export_pages
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
     _init_logging()
+    settings = get_settings()
     reset_stats()
     with measure(f"Export spaces {', '.join(space_urls)}"):
         LockfileManager.init()
 
         exported_urls: set[str] = set()
-        for space_url in space_urls:
-            try:
-                space = Space.from_url(space_url)
-                space.export()
-                exported_urls.add(space.base_url)
-            except Exception as e:
-                logger.exception("Failed to export space %s", _safe_scope_identifier(space_url))
-                _record_scope_failure("space", space_url, e)
+        discovery_workers = settings.connection_config.space_workers
+        serial = settings.export.log_level == "DEBUG" or discovery_workers <= 1
+
+        def discover(space_url: str) -> tuple[Space, list]:
+            space = Space.from_url(space_url)
+            return space, space.pages
+
+        if serial or len(space_urls) == 1:
+            for space_url in space_urls:
+                try:
+                    space = Space.from_url(space_url)
+                    space.export()
+                    exported_urls.add(space.base_url)
+                except Exception as e:
+                    logger.exception(
+                        "Failed to export space %s", _safe_scope_identifier(space_url)
+                    )
+                    _record_scope_failure("space", space_url, e)
+        else:
+            with ThreadPoolExecutor(max_workers=discovery_workers) as executor:
+                futures = {executor.submit(discover, url): url for url in space_urls}
+                for future in as_completed(futures):
+                    space_url = futures[future]
+                    try:
+                        space, pages_in_space = future.result()
+                        logger.info(
+                            "Found %d page(s) in space '%s'",
+                            len(pages_in_space),
+                            space.name,
+                        )
+                        export_pages(pages_in_space)
+                        exported_urls.add(space.base_url)
+                    except Exception as e:
+                        logger.exception(
+                            "Failed to export space %s", _safe_scope_identifier(space_url)
+                        )
+                        _record_scope_failure("space", space_url, e)
 
         for base_url in exported_urls:
             try:
@@ -693,7 +726,19 @@ def retry_failures(
         except Exception as error:
             attempted += 1
             logger.exception("Retry failed for %s", _safe_scope_identifier(retry_url))
-            _record_scope_failure("retry", retry_url, error)
+            stats = get_stats()
+            if category in {"page", "page-discovery", "attachment", "page-tree"}:
+                stats.inc_failed()
+            else:
+                stats.inc_scopes_failed()
+            identifier = _safe_scope_identifier(retry_url)
+            stats.record_failure(
+                category=category,
+                identifier=identifier,
+                title=str(failure.get("title") or identifier),
+                error_type=type(error).__name__,
+                retry_url=retry_url,
+            )
 
     if attempted == 0:
         msg = (

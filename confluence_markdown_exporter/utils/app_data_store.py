@@ -393,7 +393,7 @@ class ExportConfig(BaseModel):
         ),
     )
     attachment_path: str = Field(
-        default="{space_name}/attachments/{attachment_file_id}{attachment_extension}",
+        default="{space_name}/attachments/{attachment_id}{attachment_extension}",
         title="Attachment Path Template",
         description=(
             "Template for exported attachment file paths.\n"
@@ -412,7 +412,7 @@ class ExportConfig(BaseModel):
             "  - {attachment_extension}: The file extension of the attachment,\n"
             "including the leading dot."
         ),
-        examples=["{space_name}/attachments/{attachment_file_id}{attachment_extension}"],
+        examples=["{space_name}/attachments/{attachment_id}{attachment_extension}"],
     )
 
     @field_validator("attachment_path", mode="before")
@@ -425,7 +425,10 @@ class ExportConfig(BaseModel):
         are silently updated so file extensions are preserved.
         """
         if isinstance(v, str) and "{attachment_title}" in v and "{attachment_extension}" not in v:
-            return v.replace("{attachment_title}", "{attachment_title}{attachment_extension}")
+            v = v.replace("{attachment_title}", "{attachment_title}{attachment_extension}")
+        old_default = "{space_name}/attachments/{attachment_file_id}{attachment_extension}"
+        if v == old_default:
+            return "{space_name}/attachments/{attachment_id}{attachment_extension}"
         return v
 
     attachments_export: Literal["referenced", "all", "disabled"] = Field(

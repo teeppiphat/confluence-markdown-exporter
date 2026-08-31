@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 from confluence_markdown_exporter.utils.app_data_store import get_settings
@@ -84,6 +85,50 @@ def save_file(file_path: Path, content: str | bytes) -> None:
         raise
 
     logger.debug("Saved file %s (%d bytes)", file_path, len(content))
+
+
+class FileSizeMismatchError(OSError):
+    """Raised when a streamed file does not match its advertised byte size."""
+
+    def __init__(self, expected: int, actual: int) -> None:
+        self.expected = expected
+        self.actual = actual
+        super().__init__(f"Expected {expected} bytes, received {actual} bytes")
+
+
+def _validate_stream_size(expected: int, actual: int) -> None:
+    if expected > 0 and actual != expected:
+        raise FileSizeMismatchError(expected, actual)
+
+
+def save_stream(file_path: Path, chunks: Iterable[bytes], *, expected_size: int = 0) -> int:
+    """Atomically stream byte chunks to disk without buffering the whole file in RAM."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    written = 0
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=file_path.parent,
+            prefix=f".{file_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file:
+            tmp_path = Path(file.name)
+            for chunk in chunks:
+                if not chunk:
+                    continue
+                file.write(chunk)
+                written += len(chunk)
+            file.flush()
+        _validate_stream_size(expected_size, written)
+        tmp_path.replace(file_path)
+    except BaseException:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
+    logger.debug("Saved streamed file %s (%d bytes)", file_path, written)
+    return written
 
 
 def sanitize_filename(filename: str) -> str:

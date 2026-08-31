@@ -133,7 +133,8 @@ Pick the install method that fits your environment. All methods produce the same
     docker run --rm spenhouet/confluence-markdown-exporter --help
     ```
 
-You should see the top-level commands: `pages`, `pages-with-descendants`, `spaces`, `orgs`, and `config`.
+You should see the top-level commands: `pages`, `pages-with-descendants`, `spaces`,
+`orgs`, `retry-failures`, and `config`.
 
 ## Next steps
 

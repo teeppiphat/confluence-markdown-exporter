@@ -14,6 +14,8 @@ from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.lockfile import OrgEntry
 from confluence_markdown_exporter.utils.lockfile import PageEntry
 from confluence_markdown_exporter.utils.lockfile import SpaceEntry
+from confluence_markdown_exporter.utils.output_safety import OutputPathCollisionError
+from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
 
 LOCKFILE_FILENAME = "confluence-lock.json"
 _TEST_BASE_URL = "https://test.atlassian.net"
@@ -103,6 +105,55 @@ class TestLockfileManagerInit:
             assert LockfileManager._lock is not None
             assert LockfileManager._lock.orgs == {}
             assert LockfileManager._lockfile_path == (Path(tmp) / LOCKFILE_FILENAME).resolve()
+
+    @patch("confluence_markdown_exporter.utils.app_data_store.get_settings")
+    def test_init_reserves_paths_from_existing_lockfile(
+        self,
+        mock_get_settings: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        lock_path = tmp_path / LOCKFILE_FILENAME
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "lockfile_version": 2,
+                    "orgs": {
+                        "https://example.test": {
+                            "spaces": {
+                                "KEY": {
+                                    "pages": {
+                                        "100": {
+                                            "title": "Page",
+                                            "version": 1,
+                                            "export_path": "space/page.md",
+                                            "attachments": {
+                                                "att-1": {
+                                                    "version": 1,
+                                                    "path": "space/attachments/image.png",
+                                                }
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        mock_get_settings.return_value.export.output_path = tmp_path
+        mock_get_settings.return_value.export.lockfile_name = LOCKFILE_FILENAME
+        OutputPathRegistry.reset()
+
+        LockfileManager.init()
+
+        with pytest.raises(OutputPathCollisionError):
+            OutputPathRegistry.reserve(
+                tmp_path,
+                "space/attachments/image.png",
+                "attachment:att-2",
+            )
 
     @patch("confluence_markdown_exporter.utils.app_data_store.get_settings")
     def test_init_loads_existing_lockfile(

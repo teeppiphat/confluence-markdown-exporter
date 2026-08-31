@@ -52,6 +52,10 @@ cme spaces <space-url-1> <space-url-2> ...
 cme space <space-url>
 ```
 
+When multiple space URLs are supplied, their page trees are discovered concurrently
+up to `connection_config.space_workers`. Page export remains bounded by
+`connection_config.max_workers`.
+
 Supported space URL formats:
 
 - Confluence Cloud: `https://company.atlassian.net/wiki/spaces/SPACEKEY`
@@ -77,14 +81,25 @@ The exported Markdown file(s) will be saved in the configured output directory (
 
 ```text
 output_path/
-└── MYSPACE/
-   ├── MYSPACE.md
-   └── MYSPACE/
-      ├── My Confluence Page.md
-      └── My Confluence Page/
-            ├── My nested Confluence Page.md
-            └── Another one.md
+├── MYSPACE/
+│  ├── attachments/
+│  │  └── att123456.png
+│  ├── MYSPACE.md
+│  └── MYSPACE/
+│     ├── My Confluence Page.md
+│     └── My Confluence Page/
+│        └── My nested Confluence Page.md
+├── confluence-lock.json
+└── confluence-manifest.json
 ```
+
+Attachment downloads are streamed in chunks and moved into place atomically, so a
+large image, video, or archive does not need to fit in memory and an interrupted write
+does not replace the previous complete file. The default filename uses
+`{attachment_id}`, which is unique even when Confluence returns a duplicated `fileId`.
+
+`confluence-manifest.json` lists every exported artifact with its byte size and SHA-256
+digest. The lockfile records only fully completed pages and attachments.
 
 ## Partial failures and exit status
 
@@ -98,3 +113,25 @@ Re-run the same export command to retry failed work. Pages recorded as complete 
 `confluence-lock.json` are skipped, while failed or incomplete pages are attempted
 again. A fully successful run exits with status `0` and removes a stale failure report
 from an earlier run.
+
+To retry only the scopes in the report:
+
+```sh
+cme retry-failures
+
+# Or use another report filename inside export.output_path
+cme retry-failures --report previous-failures.json
+```
+
+The report contains a sanitized retry URL without credentials, query parameters, or
+fragments. If retry is interrupted, run the command again; each completed page has
+already been committed to the lockfile.
+
+## Concurrency and output locking
+
+- `connection_config.max_workers` bounds concurrent page exports (default `20`).
+- `connection_config.space_workers` bounds concurrent space discovery (default `4`).
+- `DEBUG` logging forces serial operation to make diagnostics readable.
+- A process lock prevents two commands from writing to the same `export.output_path`.
+  Use different output directories when intentionally running independent exports in
+  parallel.

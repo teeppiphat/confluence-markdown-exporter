@@ -37,3 +37,9 @@ This is useful for using different log levels for different environments or for 
 - Use a dedicated config file via [`CME_CONFIG_PATH`](./index.md#custom-config-file-location) so CI runs don't share state with developer machines.
 - Provide credentials via secrets and set them with `cme config set` at the start of the run, or use ENV var overrides for non-auth options.
 - Pin the version using the version-specific installer URL; see [Installation](../installation.md#pinning-a-specific-version).
+- Persist the export directory between runs when incremental resume is desired. It contains
+  the lockfile and `confluence-manifest.json`, as well as the exported content.
+- Treat exit code `1` as a partial export. Preserve `confluence-failures.json` and run
+  `cme retry-failures`, or re-run the original command.
+- Do not run concurrent jobs against the same output directory. Assign a separate
+  `CME_EXPORT__OUTPUT_PATH` to each intentionally parallel job.

@@ -59,10 +59,14 @@ How to generate links to attachments in Markdown. Options: `relative` (default),
 
 Path template for attachments.
 
-- Default: `{space_name}/attachments/{attachment_file_id}{attachment_extension}`
+- Default: `{space_name}/attachments/{attachment_id}{attachment_extension}`
 - ENV Var: `CME_EXPORT__ATTACHMENT_PATH`
 
-On Confluence Data Center / Server, where the API does not provide `fileId`, `{attachment_file_id}` falls back to the content id, so the default template still produces unique filenames.
+`{attachment_id}` is the Confluence content ID and is unique. The older default used
+`{attachment_file_id}`, but real Confluence instances can reuse that GUID across
+different attachment records; the old exact default is migrated automatically.
+`{attachment_file_id}` remains available for custom templates and falls back to the
+content ID on Data Center / Server when `fileId` is absent.
 
 ### export.attachments_export
 
@@ -360,6 +364,14 @@ exception messages. A successful export removes a stale report from an earlier r
 - Default: `confluence-failures.json`
 - ENV Var: `CME_EXPORT__FAILURE_REPORT_NAME`
 
+### export.integrity_manifest_name
+
+Name of the JSON integrity manifest written after every export. It contains the byte
+size and SHA-256 hash of each exported artifact. System lock/report files are excluded.
+
+- Default: `confluence-manifest.json`
+- ENV Var: `CME_EXPORT__INTEGRITY_MANIFEST_NAME`
+
 ### export.existence_check_batch_size
 
 Number of page IDs per batch when checking page existence during cleanup. Capped at 25 for self-hosted (CQL).
@@ -431,3 +443,15 @@ Maximum number of parallel workers for page export. Set to `1` for serial/debug 
 
 - Default: `20`
 - ENV Var: `CME_CONNECTION_CONFIG__MAX_WORKERS`
+
+Valid range: `1` to `64`.
+
+### connection_config.space_workers
+
+Maximum number of spaces whose page trees are discovered concurrently for multi-space
+and organization exports. Keep this below `max_workers` to limit API pressure. Set to
+`1` for serial discovery.
+
+- Default: `4`
+- Valid range: `1` to `16`
+- ENV Var: `CME_CONNECTION_CONFIG__SPACE_WORKERS`
