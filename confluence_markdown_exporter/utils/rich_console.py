@@ -247,6 +247,7 @@ class ExportFailure:
     title: str
     error_type: str
     status_code: int | None = None
+    retry_url: str | None = None
 
 
 @dataclass
@@ -324,6 +325,7 @@ class ExportStats:
         title: str,
         error_type: str,
         status_code: int | None = None,
+        retry_url: str | None = None,
     ) -> None:
         """Record sanitized failure details without response bodies or credentials."""
         with self._lock:
@@ -334,6 +336,7 @@ class ExportStats:
                     title=title,
                     error_type=error_type,
                     status_code=status_code,
+                    retry_url=retry_url,
                 )
             )
 

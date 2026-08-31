@@ -24,6 +24,7 @@ from confluence_markdown_exporter import config as config_module
 from confluence_markdown_exporter.utils.app_data_store import APP_CONFIG_PATH
 from confluence_markdown_exporter.utils.app_data_store import get_settings
 from confluence_markdown_exporter.utils.export import save_file
+from confluence_markdown_exporter.utils.integrity import write_integrity_manifest
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.measure_time import measure
 from confluence_markdown_exporter.utils.output_safety import OutputLockError
@@ -214,7 +215,7 @@ def _write_failure_report() -> Path | None:
         return None
 
     payload = {
-        "report_version": 1,
+        "report_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "summary": {
             "pages_total": stats.total,
@@ -232,6 +233,27 @@ def _write_failure_report() -> Path | None:
 
 def _finish_export() -> None:
     """Persist run diagnostics, print the summary, and signal partial failure to callers."""
+    settings = get_settings()
+    try:
+        manifest_path = write_integrity_manifest(
+            settings.export.output_path,
+            settings.export.integrity_manifest_name,
+            excluded_names={
+                settings.export.lockfile_name,
+                settings.export.failure_report_name,
+            },
+        )
+        logger.info("Integrity manifest: %s", manifest_path)
+    except Exception as error:
+        logger.exception("Failed to write integrity manifest")
+        stats = get_stats()
+        stats.inc_scopes_failed()
+        stats.record_failure(
+            category="integrity",
+            identifier=settings.export.integrity_manifest_name,
+            title="Integrity manifest",
+            error_type=type(error).__name__,
+        )
     report_path = _write_failure_report()
     _print_summary()
     if report_path is not None:
@@ -247,6 +269,16 @@ def _safe_scope_identifier(url: str) -> str:
     return f"{host}{path}"
 
 
+def _safe_retry_url(url: str) -> str:
+    """Keep only the scheme, host, port, and path needed to retry a scope."""
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme if parsed.scheme in {"http", "https"} else "https"
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path.rstrip("/") or "/"
+    return f"{scheme}://{host}{port}{path}"
+
+
 def _record_scope_failure(category: str, url: str, error: Exception) -> None:
     """Record a sanitized top-level discovery/export failure and continue the run."""
     identifier = _safe_scope_identifier(url)
@@ -257,6 +289,7 @@ def _record_scope_failure(category: str, url: str, error: Exception) -> None:
         identifier=identifier,
         title=identifier,
         error_type=type(error).__name__,
+        retry_url=_safe_retry_url(url),
     )
 
 
@@ -331,6 +364,9 @@ def pages(
                     identifier=str(page.id),
                     title=page.title,
                     error_type=type(e).__name__,
+                    retry_url=(
+                        f"{page.base_url}/wiki/spaces/{page.space.key}/pages/{page.id}"
+                    ),
                 )
             exported_urls.add(page.base_url)
 
@@ -563,6 +599,109 @@ app.command(
     ),
     epilog=("**Example:**\n\n- `cme org https://company.atlassian.net`\n\n"),
 )(orgs)
+
+
+def _retry_failure(category: str, retry_url: str) -> bool:
+    """Replay one supported failure and return whether it was retryable."""
+    from confluence_markdown_exporter.confluence import Organization
+    from confluence_markdown_exporter.confluence import Page
+    from confluence_markdown_exporter.confluence import Space
+    from confluence_markdown_exporter.confluence import sync_removed_pages
+
+    if category in {"page", "page-discovery", "attachment"}:
+        page = Page.from_url(retry_url)
+        stats = get_stats()
+        stats.add_total(1)
+        attachment_entries = page.export()
+        LockfileManager.record_page(page, attachment_entries)
+        stats.inc_exported()
+    elif category == "page-tree":
+        Page.from_url(retry_url).export_with_descendants()
+    elif category in {"space", "space-discovery"}:
+        Space.from_url(retry_url).export()
+    elif category == "organization":
+        Organization.from_url(retry_url).export()
+    elif category == "cleanup":
+        sync_removed_pages(retry_url)
+    else:
+        return False
+    return True
+
+
+def _load_failure_entries(report_path: Path) -> list[dict]:
+    """Load and minimally validate failure entries from a report."""
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        failures = payload["failures"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        msg = f"Invalid failure report: {report_path}"
+        raise ValueError(msg) from error
+    if not isinstance(failures, list):
+        msg = f"Invalid failure report: {report_path}"
+        raise ValueError(msg)  # noqa: TRY004
+    return [failure for failure in failures if isinstance(failure, dict)]
+
+
+@app.command(
+    name="retry-failures",
+    help=(
+        "Retry scopes recorded in the latest sanitized failure report.\n\n"
+        "By default reads `export.failure_report_name` from the output directory. "
+        "Successful retries replace the report; a fully successful run removes it."
+    ),
+)
+@_with_output_lock
+def retry_failures(
+    report: Annotated[
+        Path | None,
+        typer.Option(
+            "--report",
+            help="Failure-report filename relative to export.output_path.",
+        ),
+    ] = None,
+) -> None:
+    """Replay failed page, space, organization, attachment, and cleanup scopes."""
+    _init_logging()
+    settings = get_settings()
+    report_path = OutputPathRegistry.reserve(
+        settings.export.output_path,
+        report or settings.export.failure_report_name,
+        "system:failure-report",
+    )
+    if not report_path.exists():
+        msg = f"Failure report does not exist: {report_path}"
+        raise ValueError(msg)
+    failures = _load_failure_entries(report_path)
+
+    reset_stats()
+    LockfileManager.init()
+    attempted = 0
+    seen: set[tuple[str, str]] = set()
+    for failure in failures:
+        category = str(failure.get("category", ""))
+        retry_url = failure.get("retry_url")
+        if not isinstance(retry_url, str) or not retry_url:
+            continue
+        retry_url = _safe_retry_url(retry_url)
+        retry_key = (category, retry_url)
+        if retry_key in seen:
+            continue
+        seen.add(retry_key)
+        try:
+            if _retry_failure(category, retry_url):
+                attempted += 1
+        except Exception as error:
+            attempted += 1
+            logger.exception("Retry failed for %s", _safe_scope_identifier(retry_url))
+            _record_scope_failure("retry", retry_url, error)
+
+    if attempted == 0:
+        msg = (
+            "The failure report has no retryable entries. "
+            "Run the original export command again for reports created by older versions."
+        )
+        raise ValueError(msg)
+    _finish_export()
 
 
 @app.command(

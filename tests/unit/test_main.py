@@ -64,6 +64,8 @@ class TestFailureReport:
             export=SimpleNamespace(
                 output_path=tmp_path,
                 failure_report_name="confluence-failures.json",
+                integrity_manifest_name="confluence-manifest.json",
+                lockfile_name="confluence-lock.json",
             )
         )
 
@@ -93,6 +95,7 @@ class TestFailureReport:
                 "title": "Example page",
                 "error_type": "RuntimeError",
                 "status_code": None,
+                "retry_url": None,
             }
         ]
         assert "message" not in payload["failures"][0]
@@ -118,6 +121,7 @@ class TestFailureReport:
                 return_value=report_path,
             ),
             patch("confluence_markdown_exporter.main._print_summary"),
+            patch("confluence_markdown_exporter.main.write_integrity_manifest"),
             patch("confluence_markdown_exporter.main.console"),
             pytest.raises(typer.Exit) as exc_info,
         ):
@@ -176,3 +180,44 @@ class TestFailureReport:
         assert '"category": "space"' in report
         assert "token=secret" not in report
         assert "private discovery detail" not in report
+
+    def test_retry_failures_replays_page_and_removes_report(self, tmp_path: Path) -> None:
+        settings = self._settings(tmp_path)
+        settings.export.log_level = "ERROR"
+        settings.export.save_log_to_file = False
+        report_path = tmp_path / "confluence-failures.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "report_version": 2,
+                    "failures": [
+                        {
+                            "category": "page",
+                            "retry_url": "https://example.test/wiki/spaces/KEY/pages/123",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        page = MagicMock(id=123, title="Recovered", base_url="https://example.test")
+        page.export.return_value = {}
+
+        with (
+            patch("confluence_markdown_exporter.main.get_settings", return_value=settings),
+            patch("confluence_markdown_exporter.main.LockfileManager") as mock_lockfile,
+            patch(
+                "confluence_markdown_exporter.confluence.Page.from_url",
+                return_value=page,
+            ) as mock_from_url,
+        ):
+            result = CliRunner().invoke(app, ["retry-failures"])
+
+        assert result.exit_code == 0
+        mock_from_url.assert_called_once_with(
+            "https://example.test/wiki/spaces/KEY/pages/123"
+        )
+        page.export.assert_called_once_with()
+        mock_lockfile.record_page.assert_called_once_with(page, {})
+        assert not report_path.exists()
+        assert (tmp_path / "confluence-manifest.json").exists()

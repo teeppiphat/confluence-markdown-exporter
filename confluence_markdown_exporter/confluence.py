@@ -591,6 +591,7 @@ class Organization(BaseModel):
                 identifier=space.key,
                 title=space.name,
                 error_type=type(error).__name__,
+                retry_url=f"{self.base_url}/wiki/spaces/{space.key}",
             )
 
         if serial:
@@ -893,6 +894,7 @@ class Attachment(Document):
                 title=self.title,
                 error_type=type(e).__name__,
                 status_code=status_code,
+                retry_url=self._parent_page_retry_url,
             )
             return False
         except RequestException as e:
@@ -903,13 +905,38 @@ class Attachment(Document):
                 identifier=str(self.id),
                 title=self.title,
                 error_type=type(e).__name__,
+                retry_url=self._parent_page_retry_url,
             )
             return False
 
+        if self.file_size > 0 and len(response.content) != self.file_size:
+            logger.warning(
+                "Attachment '%s' size mismatch: expected %d bytes, received %d bytes",
+                self.title,
+                self.file_size,
+                len(response.content),
+            )
+            stats.inc_attachments_failed()
+            stats.record_failure(
+                category="attachment",
+                identifier=str(self.id),
+                title=self.title,
+                error_type="AttachmentSizeMismatch",
+                retry_url=self._parent_page_retry_url,
+            )
+            return False
         save_file(filepath, response.content)
         logger.debug("Saved attachment '%s' (%d bytes)", self.title, len(response.content))
         stats.inc_attachments_exported()
         return True
+
+    @property
+    def _parent_page_retry_url(self) -> str | None:
+        """Return a safe parent-page URL so an attachment failure can be replayed."""
+        if not self.ancestors:
+            return None
+        page_id = self.ancestors[-1].id
+        return f"{self.base_url}/wiki/spaces/{self.space.key}/pages/{page_id}"
 
 
 class Ancestor(Document):
@@ -1369,9 +1396,11 @@ class Page(Document):
             # Skip download if the same attachment version is tracked and the file still exists
             if att_id in old_entries:
                 old = old_entries[att_id]
-                if old.version == att_version and resolve_output_path(
-                    output_path, old.path
-                ).exists():
+                existing_path = resolve_output_path(output_path, old.path)
+                size_matches = attachment.file_size <= 0 or (
+                    existing_path.exists() and existing_path.stat().st_size == attachment.file_size
+                )
+                if old.version == att_version and existing_path.exists() and size_matches:
                     new_entries[att_id] = old
                     logger.debug(
                         "Skipping unchanged attachment '%s' (v%d)", attachment.title, att_version
@@ -3614,6 +3643,9 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
                         identifier=str(page.id),
                         title=page.title,
                         error_type=type(e).__name__,
+                        retry_url=(
+                            f"{page.base_url}/wiki/spaces/{page.space.key}/pages/{page.id}"
+                        ),
                     )
                 finally:
                     progress.advance(task)
@@ -3635,6 +3667,9 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
                             identifier=str(page.id),
                             title=page.title,
                             error_type=type(e).__name__,
+                            retry_url=(
+                                f"{page.base_url}/wiki/spaces/{page.space.key}/pages/{page.id}"
+                            ),
                         )
                     finally:
                         progress.advance(task)

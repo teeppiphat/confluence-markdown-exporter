@@ -372,6 +372,7 @@ class TestAttachmentsExportFlag:
         att.id = att_id
         att.version.number = version
         att.export_path = Path(f"attachments/{att_id}.bin")
+        att.file_size = 0
         return att
 
     def _make_page_mock(self, attachments: list) -> MagicMock:
@@ -450,6 +451,38 @@ class TestAttachmentsExportFlag:
                 Page.export_attachments(page)
 
         att.export.assert_called_once_with(overwrite=True)
+
+    def test_attachment_size_mismatch_preserves_existing_file(self, tmp_path: Path) -> None:
+        """A truncated response is rejected before replacing a valid local file."""
+        att = MagicMock()
+        att.id = "att-1"
+        att.title = "image.png"
+        att.file_size = 10
+        att.export_path = Path("attachments/att-1.png")
+        att.base_url = "https://example.test"
+        att.download_link = "/download/att-1"
+        att.ancestors = []
+        destination = tmp_path / att.export_path
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"existing-valid-file")
+        response = MagicMock(content=b"short")
+        client = MagicMock(url="https://example.test")
+        client.request.return_value = response
+        stats = reset_stats()
+
+        with (
+            patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
+            patch(
+                "confluence_markdown_exporter.confluence.get_thread_confluence",
+                return_value=client,
+            ),
+        ):
+            mock_settings.export.output_path = tmp_path
+            exported = Attachment.export(att, overwrite=True)
+
+        assert exported is False
+        assert destination.read_bytes() == b"existing-valid-file"
+        assert stats.attachments_failed == 1
 
     def test_disabled_skips_download_and_lockfile(self) -> None:
         """With attachments_export='disabled', no download and no lockfile lookup."""
