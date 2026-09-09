@@ -25,6 +25,21 @@ docker pull spenhouet/confluence-markdown-exporter:latest
 docker run --rm spenhouet/confluence-markdown-exporter --help
 ```
 
+### Build the current source checkout
+
+Repository fixes can be newer than the image published on Docker Hub. Build the checked
+out commit locally when a new fix is required immediately:
+
+```bash
+git pull origin main
+docker build -t confluence-markdown-exporter:local .
+docker run --rm confluence-markdown-exporter:local --help
+```
+
+Use `confluence-markdown-exporter:local` in the volume/config examples below. Rebuild the
+image after pulling new source; reinstalling `cme` on the host does not update an existing
+container image.
+
 The image pins `export.output_path` to `/data/output` (via the `CME_EXPORT__OUTPUT_PATH` env var baked into the image), overriding whatever value the mounted config file has. Bind-mount your host export directory there and exported files appear in it.
 
 ## Providing configuration

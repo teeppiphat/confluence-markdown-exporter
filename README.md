@@ -140,6 +140,9 @@ uncommitted working tree.
 
 > **Using the Docker image?** Steps 2 and 3 below use the local `cme` CLI. Inside the Docker image there is no interactive `cme config` menu; you supply a pre-defined config (mounted JSON file or `CME_*` environment variables) and run a single export command per container invocation. See the [Docker page](https://spenhouet.github.io/confluence-markdown-exporter/docker) for the non-interactive flow.
 
+To use repository fixes that have not reached Docker Hub yet, build this checkout with
+`docker build -t confluence-markdown-exporter:local .` and run that local image.
+
 ### 2. Authenticate
 
 Set Confluence credentials interactively (URL, username, API token / PAT):
