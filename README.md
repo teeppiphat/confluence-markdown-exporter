@@ -57,6 +57,8 @@ required immediately.
 - Long page and attachment paths are limited by UTF-8 bytes rather than character count.
   Multibyte titles are shortened with a stable hash while retaining extensions, avoiding
   Linux/macOS `File name too long` errors without creating path collisions.
+- Atomic temporary files use a short independent name, so a valid destination that already
+  reaches the 255-byte component limit can still be written safely on Linux.
 
 ### Parallelism and output safety
 

@@ -89,7 +89,11 @@ def _open_atomic_temp(file_path: Path, *, binary: bool) -> tuple[BinaryIO | Text
         previous_mode = stat.S_IMODE(file_path.stat().st_mode)
 
     for _attempt in range(10):
-        tmp_path = file_path.with_name(f".{file_path.name}.{secrets.token_hex(8)}.tmp")
+        # Keep the temporary component independent of the destination name.
+        # A destination may already consume the full 255-byte NAME_MAX budget;
+        # prefixing/suffixing that name would make the atomic temp itself fail
+        # with ENAMETOOLONG on Linux.
+        tmp_path = file_path.with_name(f".cme-{secrets.token_hex(8)}.tmp")
         try:
             fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
         except FileExistsError:

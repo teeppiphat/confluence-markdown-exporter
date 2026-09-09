@@ -135,7 +135,7 @@ class TestSaveFile:
                 save_file(file_path, "replacement")
 
             assert file_path.read_text(encoding="utf-8") == "original"
-            assert list(directory.glob(".test.txt.*.tmp")) == []
+            assert list(directory.glob(".cme-*.tmp")) == []
 
     def test_atomic_write_uses_normal_file_creation_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -159,6 +159,16 @@ class TestSaveFile:
             save_file(file_path, "replacement")
 
             assert stat.S_IMODE(file_path.stat().st_mode) == 0o640
+
+    def test_atomic_temp_name_does_not_extend_long_destination_name(self) -> None:
+        """A 255-byte destination must not produce an overlong temp component."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / ("a" * 252 + ".md")
+
+            save_file(destination, "content")
+
+            assert destination.read_text(encoding="utf-8") == "content"
+            assert list(Path(temp_dir).glob(".cme-*.tmp")) == []
 
 
 class TestSanitizeFilename:

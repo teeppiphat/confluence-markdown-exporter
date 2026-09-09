@@ -59,6 +59,10 @@ ancestor directories, attachments, debug artifacts, and comment sidecars. Re-run
 original export command; the failed page will be retried while completed pages remain
 skipped.
 
+Atomic temporary files use a short `.cme-<token>.tmp` name independent of the destination.
+This is required when the final filename already consumes the full 255-byte limit; older
+builds could still raise `Errno 36` because they appended the token to the long filename.
+
 To choose a smaller portable limit explicitly:
 
 ```sh
