@@ -72,14 +72,18 @@ def resolve_output_path(output_path: Path, path: Path | str) -> Path:
 
 
 @contextmanager
-def acquire_output_lock(output_path: Path) -> Iterator[Path]:
-    """Acquire an OS-level lock for one output directory without waiting."""
+def acquire_output_lock(output_path: Path, *, timeout: float = 0) -> Iterator[Path]:
+    """Acquire an OS-level lock for one output directory within *timeout* seconds.
+
+    A negative timeout waits indefinitely, which detached queue workers use so
+    they remain queued behind an already-running foreground export.
+    """
     root = output_path.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     lock_path = root / ".cme-export.lock"
     lock = FileLock(lock_path)
     try:
-        lock.acquire(timeout=0)
+        lock.acquire(timeout=timeout)
     except Timeout as e:
         msg = (
             f"Another confluence-markdown-exporter process is already writing to {root}. "

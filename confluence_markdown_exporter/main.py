@@ -3,6 +3,7 @@ import functools
 import io
 import json
 import logging
+import os
 import platform
 import sys
 import urllib.parse
@@ -27,6 +28,7 @@ from rich.table import Table
 
 from confluence_markdown_exporter import __version__
 from confluence_markdown_exporter import config as config_module
+from confluence_markdown_exporter.jobs import jobs_app
 from confluence_markdown_exporter.utils.app_data_store import APP_CONFIG_PATH
 from confluence_markdown_exporter.utils.app_data_store import get_settings
 from confluence_markdown_exporter.utils.export import save_file
@@ -93,6 +95,9 @@ _QUICKSTART_EPILOG = (
     "- Export a space: `cme spaces https://company.atlassian.net/wiki/spaces/MYSPACE`\n\n"
     "- Inventory spaces: `cme list-spaces https://company.atlassian.net --format json`\n\n"
     "- Export everything: `cme orgs https://company.atlassian.net`\n\n"
+    "- Run a resilient background backup: "
+    "`cme orgs https://company.atlassian.net --all-spaces --background`\n\n"
+    "- Inspect background work: `cme jobs`\n\n"
     "- Each command also has a singular alias"
     " (`page`, `space`, `org`) that behaves identically.\n\n"
 )
@@ -126,6 +131,20 @@ app = _CmeTyper(
     epilog=_QUICKSTART_EPILOG,
 )
 app.add_typer(config_module.app, name="config")
+app.add_typer(jobs_app, name="jobs")
+
+
+def _queue_background(command: list[str]) -> None:
+    """Submit a detached command and print the durable job identifier."""
+    from confluence_markdown_exporter.jobs import submit_job
+
+    job = submit_job(command)
+    console.print(
+        f"Queued background job [highlight]{job['id']}[/highlight].\n"
+        "Check it with [code]cme jobs[/code], "
+        f"[code]cme jobs status {job['id']}[/code], or "
+        f"[code]cme jobs logs -f {job['id']}[/code]."
+    )
 
 
 def _with_output_lock(func: Callable[P, R]) -> Callable[P, R]:
@@ -133,8 +152,14 @@ def _with_output_lock(func: Callable[P, R]) -> Callable[P, R]:
 
     @functools.wraps(func)
     def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        # Submitting work must remain possible while another queued job owns the
+        # output lock. The detached child invokes the command without this flag
+        # and acquires the lock when it actually reaches the front of the queue.
+        if kwargs.get("background") is True:
+            return func(*args, **kwargs)
         OutputPathRegistry.reset()
-        with acquire_output_lock(get_settings().export.output_path):
+        lock_timeout = -1 if os.environ.get("CME_JOB_ID") else 0
+        with acquire_output_lock(get_settings().export.output_path, timeout=lock_timeout):
             return func(*args, **kwargs)
 
     return wrapped
@@ -329,7 +354,19 @@ def pages(
             metavar="PAGE_URL",
         ),
     ],
+    background: Annotated[  # noqa: FBT002 - Typer exposes this as a CLI option
+        bool,
+        typer.Option(
+            "--background",
+            "-b",
+            help="Queue this export and keep it running after the terminal disconnects.",
+        ),
+    ] = False,
 ) -> None:
+    if background:
+        _queue_background(["pages", *page_urls])
+        return
+
     from confluence_markdown_exporter.confluence import Page
     from confluence_markdown_exporter.confluence import sync_removed_pages
     from confluence_markdown_exporter.utils.page_registry import PageTitleRegistry
@@ -430,7 +467,19 @@ def pages_with_descendants(
             metavar="PAGE_URL",
         ),
     ],
+    background: Annotated[  # noqa: FBT002 - Typer exposes this as a CLI option
+        bool,
+        typer.Option(
+            "--background",
+            "-b",
+            help="Queue this export and keep it running after the terminal disconnects.",
+        ),
+    ] = False,
 ) -> None:
+    if background:
+        _queue_background(["pages-with-descendants", *page_urls])
+        return
+
     from confluence_markdown_exporter.confluence import Page
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
@@ -503,7 +552,19 @@ def spaces(
             metavar="SPACE_URL",
         ),
     ],
+    background: Annotated[  # noqa: FBT002 - Typer exposes this as a CLI option
+        bool,
+        typer.Option(
+            "--background",
+            "-b",
+            help="Queue this export and keep it running after the terminal disconnects.",
+        ),
+    ] = False,
 ) -> None:
+    if background:
+        _queue_background(["spaces", *space_urls])
+        return
+
     from confluence_markdown_exporter.confluence import Space
     from confluence_markdown_exporter.confluence import export_pages
     from confluence_markdown_exporter.confluence import sync_removed_pages
@@ -660,8 +721,23 @@ def list_spaces(
         Path | None,
         typer.Option("--output", "-o", help="Write JSON or CSV inventory to this file."),
     ] = None,
+    background: Annotated[  # noqa: FBT002 - Typer exposes this as a CLI option
+        bool,
+        typer.Option(
+            "--background",
+            "-b",
+            help="Queue this inventory and keep it running after the terminal disconnects.",
+        ),
+    ] = False,
 ) -> None:
     """List every space exposed by the Confluence space collection API."""
+    if background:
+        command = ["list-spaces", *base_urls, "--format", output_format]
+        if output is not None:
+            command.extend(["--output", str(output)])
+        _queue_background(command)
+        return
+
     from confluence_markdown_exporter.confluence import Organization
 
     _init_logging()
@@ -757,7 +833,22 @@ def orgs(
             ),
         ),
     ] = False,
+    background: Annotated[  # noqa: FBT002 - Typer exposes this as a CLI option
+        bool,
+        typer.Option(
+            "--background",
+            "-b",
+            help="Queue this export and keep it running after the terminal disconnects.",
+        ),
+    ] = False,
 ) -> None:
+    if background:
+        command = ["orgs", *base_urls]
+        if all_spaces:
+            command.append("--all-spaces")
+        _queue_background(command)
+        return
+
     from confluence_markdown_exporter.confluence import Organization
     from confluence_markdown_exporter.confluence import sync_removed_pages
 
@@ -845,7 +936,7 @@ def _load_failure_entries(report_path: Path) -> list[dict]:
     ),
 )
 @_with_output_lock
-def retry_failures(
+def retry_failures(  # noqa: C901 - validation and replay branches are intentionally explicit
     report: Annotated[
         Path | None,
         typer.Option(
@@ -853,8 +944,23 @@ def retry_failures(
             help="Failure-report filename relative to export.output_path.",
         ),
     ] = None,
+    background: Annotated[  # noqa: FBT002 - Typer exposes this as a CLI option
+        bool,
+        typer.Option(
+            "--background",
+            "-b",
+            help="Queue retries and keep them running after the terminal disconnects.",
+        ),
+    ] = False,
 ) -> None:
     """Replay failed page, space, organization, attachment, and cleanup scopes."""
+    if background:
+        command = ["retry-failures"]
+        if report is not None:
+            command.extend(["--report", str(report)])
+        _queue_background(command)
+        return
+
     _init_logging()
     settings = get_settings()
     report_path = OutputPathRegistry.reserve(

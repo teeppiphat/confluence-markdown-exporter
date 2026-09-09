@@ -121,6 +121,67 @@ This can be much larger than a normal organization export. Archived and personal
 are attempted independently; inaccessible entries are recorded in
 `confluence-failures.json` without stopping the remaining backup.
 
+`list-spaces` already inventories every space returned by Confluence, so it does not need
+an `--all-spaces` flag. The flag belongs to `orgs`, where it expands the export scope.
+
+## Background jobs
+
+Long-running commands can be queued with `--background` (or `-b`). The command returns a
+job ID immediately and a detached worker continues after the terminal or SSH connection
+closes:
+
+```sh
+cme orgs https://company.atlassian.net --all-spaces --background
+cme spaces https://company.atlassian.net/wiki/spaces/SPACEKEY --background
+cme list-spaces https://company.atlassian.net \
+  --format json --output spaces.json --background
+cme retry-failures --background
+```
+
+The option is supported by `pages`, `pages-with-descendants`, `spaces`, `list-spaces`,
+`orgs`, and `retry-failures`. Jobs use a persistent per-user FIFO queue. One queued command
+runs at a time, while the export command's normal page and space worker settings still
+provide bounded parallelism within that job. This prevents two queued backups from writing
+the same output simultaneously. If a foreground exporter already owns the output lock, the
+detached job waits for it instead of failing immediately.
+
+List all retained work, including completed and waiting jobs:
+
+```sh
+cme jobs
+cme jobs status
+```
+
+Inspect one job and follow its output. Closing the log viewer does not stop the job:
+
+```sh
+cme jobs status <job-id>
+cme jobs logs <job-id>
+cme jobs logs --follow <job-id>
+```
+
+Job states are `queued`, `starting`, `running`, `succeeded`, `failed`, and `interrupted`.
+The status record includes timestamps, attempt number, process ID while running, exit code,
+working directory, command, and log path. Credentials are never copied into the job file;
+the detached command reads the normal CME configuration. Non-secret export and connection
+environment overrides are retained for that job.
+
+The queue and CME configuration are per operating-system user. Submit and inspect jobs as
+the same user; running one command with `sudo` creates or reads root's separate queue and
+configuration instead.
+
+After a host reboot or unexpected worker termination, requeue stale `running`, `starting`,
+and `interrupted` work:
+
+```sh
+cme jobs resume
+```
+
+Restarted exports use the normal `confluence-lock.json`, so pages and attachments already
+committed successfully are skipped. A job with partial export failures has status `failed`
+and exit code `1`; inspect its log and `confluence-failures.json`, then queue
+`cme retry-failures --background` after resolving the cause.
+
 ## Output layout
 
 The exported Markdown file(s) will be saved in the configured output directory (see [`export.output_path`](./configuration/options.md#exportoutput_path)) e.g.:
@@ -181,3 +242,5 @@ already been committed to the lockfile.
 - A process lock prevents two commands from writing to the same `export.output_path`.
   Use different output directories when intentionally running independent exports in
   parallel.
+- The background queue is intentionally FIFO and serial across jobs. Parallel page and
+  space processing still occurs inside the active job according to the worker settings.

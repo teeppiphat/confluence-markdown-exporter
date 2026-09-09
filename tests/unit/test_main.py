@@ -60,6 +60,7 @@ class TestAppConfiguration:
         """Test that the config sub-app is registered as a command group."""
         group_names = [group.name for group in app.registered_groups]
         assert "config" in group_names
+        assert "jobs" in group_names
 
 
 class TestListSpacesCommand:

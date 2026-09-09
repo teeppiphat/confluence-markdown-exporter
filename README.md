@@ -73,6 +73,11 @@ required immediately.
 
 ### Resume, retry, and verification
 
+- Long-running commands accept `--background` / `-b` and are placed in a persistent
+  FIFO queue whose worker is detached from the terminal and SSH session.
+- `cme jobs` lists queued, running, succeeded, failed, and interrupted work;
+  `cme jobs status`, `cme jobs logs --follow`, and `cme jobs resume` provide inspection
+  and recovery without owning the export process.
 - Page and space failures are isolated so remaining work can continue.
 - Partial runs exit with status `1` and write a sanitized
   `confluence-failures.json`; `cme retry-failures` replays only those recorded scopes.
@@ -128,6 +133,28 @@ uv sync --group dev
 uv run cme --help
 uv run pytest -q
 ```
+
+### Background backup resilient to SSH disconnects
+
+Queue a complete backup and return to the shell immediately:
+
+```bash
+uv run cme orgs https://company.atlassian.net --all-spaces --background
+```
+
+Inspect the persistent queue or follow one job's captured output:
+
+```bash
+uv run cme jobs
+uv run cme jobs status <job-id>
+uv run cme jobs logs --follow <job-id>
+```
+
+The worker is detached from the terminal, so an SSH `Broken pipe` only disconnects the
+viewer. If the host or worker process itself restarts, recover stale work with
+`uv run cme jobs resume`; the existing export lockfile lets CME skip completed pages.
+Run submission and status commands as the same operating-system user; `sudo` uses a
+different queue and CME configuration.
 
 After a branch or commit has been pushed, it can also be installed without a local
 checkout. Pin a commit SHA for a reproducible installation:

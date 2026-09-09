@@ -40,6 +40,22 @@ cme retry-failures
 The command exits `1` while any retry remains unsuccessful and removes the report only
 after a fully successful run.
 
+### SSH disconnects with `client_loop: send disconnect: Broken pipe`
+
+A foreground command belongs to its SSH session and may receive a hangup when that session
+breaks. Submit long exports to CME's detached queue instead:
+
+```sh
+cme orgs https://company.atlassian.net --all-spaces --background
+cme jobs
+cme jobs logs --follow <job-id>
+```
+
+Disconnecting from `jobs logs --follow` does not stop the worker. Reconnect and run the same
+status or logs command again. If the host rebooted or the detached worker actually died,
+run `cme jobs resume`; stale work returns to the queue and the export lockfile prevents
+completed pages from being downloaded again.
+
 ### Another exporter is already writing to the output directory
 
 Only one process can write to one `export.output_path`. Wait for the active export to
