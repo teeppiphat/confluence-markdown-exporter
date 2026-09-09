@@ -211,7 +211,10 @@ Character mapping for filename encoding.
 
 ### export.filename_length
 
-Maximum length of filenames.
+Maximum UTF-8 byte length of each generated path component. Values above the common
+filesystem limit are capped at 255 bytes. Long page, ancestor, space, attachment, and
+sidecar names are shortened without splitting Unicode characters. A stable hash is added
+to prevent different long names from colliding, and the final file extension is retained.
 
 - Default: `255`
 - ENV Var: `CME_EXPORT__FILENAME_LENGTH`

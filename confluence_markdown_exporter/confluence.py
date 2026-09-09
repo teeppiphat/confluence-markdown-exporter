@@ -63,6 +63,7 @@ from confluence_markdown_exporter.utils.app_data_store import normalize_instance
 from confluence_markdown_exporter.utils.drawio_converter import load_and_parse_drawio
 from confluence_markdown_exporter.utils.export import FileSizeMismatchError
 from confluence_markdown_exporter.utils.export import github_heading_slug
+from confluence_markdown_exporter.utils.export import limit_path_component_bytes
 from confluence_markdown_exporter.utils.export import sanitize_filename
 from confluence_markdown_exporter.utils.export import sanitize_key
 from confluence_markdown_exporter.utils.export import save_file
@@ -886,7 +887,9 @@ class Attachment(Document):
     @property
     def export_path(self) -> Path:
         filepath_template = Template(settings.export.attachment_path.replace("{", "${"))
-        return Path(filepath_template.safe_substitute(self._template_vars))
+        return limit_path_component_bytes(
+            Path(filepath_template.safe_substitute(self._template_vars))
+        )
 
     @classmethod
     def from_json(cls, data: JsonResponse, base_url: str) -> "Attachment":
@@ -1058,7 +1061,9 @@ class Descendant(Document):
     @property
     def export_path(self) -> Path:
         filepath_template = Template(settings.export.page_path.replace("{", "${"))
-        return Path(filepath_template.safe_substitute(self._template_vars))
+        return limit_path_component_bytes(
+            Path(filepath_template.safe_substitute(self._template_vars))
+        )
 
     @classmethod
     def from_json(cls, data: JsonResponse, base_url: str) -> "Descendant":
@@ -1166,7 +1171,9 @@ class Page(Document):
     @property
     def export_path(self) -> Path:
         filepath_template = Template(settings.export.page_path.replace("{", "${"))
-        return Path(filepath_template.safe_substitute(self._template_vars))
+        return limit_path_component_bytes(
+            Path(filepath_template.safe_substitute(self._template_vars))
+        )
 
     @property
     def html(self) -> str:
@@ -1206,12 +1213,18 @@ class Page(Document):
             pages = [self, *self.descendants]
         export_pages(pages)
 
+    def _sidecar_export_path(self, suffix: str) -> Path:
+        """Build a byte-safe path for an artifact derived from the Markdown name."""
+        return limit_path_component_bytes(
+            self.export_path.parent / f"{self.export_path.stem}{suffix}"
+        )
+
     def export_body(self) -> None:
         soup = BeautifulSoup(self.html, "html.parser")
         save_file(
             OutputPathRegistry.reserve(
                 settings.export.output_path,
-                self.export_path.parent / f"{self.export_path.stem}_body_view.html",
+                Page._sidecar_export_path(self, "_body_view.html"),
                 f"page:{self.id}:body-view",
             ),
             str(soup.prettify()),
@@ -1220,7 +1233,7 @@ class Page(Document):
         save_file(
             OutputPathRegistry.reserve(
                 settings.export.output_path,
-                self.export_path.parent / f"{self.export_path.stem}_body_export_view.html",
+                Page._sidecar_export_path(self, "_body_export_view.html"),
                 f"page:{self.id}:body-export-view",
             ),
             str(soup.prettify()),
@@ -1228,7 +1241,7 @@ class Page(Document):
         save_file(
             OutputPathRegistry.reserve(
                 settings.export.output_path,
-                self.export_path.parent / f"{self.export_path.stem}_body_editor2.xml",
+                Page._sidecar_export_path(self, "_body_editor2.xml"),
                 f"page:{self.id}:body-editor2",
             ),
             str(self.editor2),
@@ -1353,7 +1366,7 @@ class Page(Document):
         save_file(
             OutputPathRegistry.reserve(
                 settings.export.output_path,
-                self.export_path.parent / f"{self.export_path.stem}.comments.md",
+                Page._sidecar_export_path(self, ".comments.md"),
                 f"page:{self.id}:comments",
             ),
             "\n".join(lines),

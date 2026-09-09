@@ -10,6 +10,7 @@ import pytest
 
 from confluence_markdown_exporter.utils.export import escape_character_class
 from confluence_markdown_exporter.utils.export import github_heading_slug
+from confluence_markdown_exporter.utils.export import limit_path_component_bytes
 from confluence_markdown_exporter.utils.export import parse_encode_setting
 from confluence_markdown_exporter.utils.export import sanitize_filename
 from confluence_markdown_exporter.utils.export import sanitize_key
@@ -231,6 +232,19 @@ class TestSanitizeFilename:
         assert result == long_filename[:10]
 
     @patch("confluence_markdown_exporter.utils.export.export_options")
+    def test_filename_length_is_enforced_in_utf8_bytes(
+        self, mock_export_options: MagicMock
+    ) -> None:
+        mock_export_options.filename_encoding = ""
+        mock_export_options.filename_length = 255
+        mock_export_options.filename_lowercase = False
+
+        result = sanitize_filename("พื้นที่เขตการศึกษา" * 20)
+
+        assert len(result.encode("utf-8")) <= 255
+        assert "~" in result
+
+    @patch("confluence_markdown_exporter.utils.export.export_options")
     def test_complex_filename_sanitization(self, mock_export_options: MagicMock) -> None:
         """Test complex filename sanitization with multiple rules."""
         mock_export_options.filename_encoding = '" ":"_","?":"_",":":"_"'
@@ -259,6 +273,35 @@ class TestSanitizeFilename:
 
         result = sanitize_filename("test\x00\x08\x1fname")
         assert result == "testname"
+
+
+class TestPathComponentByteLimit:
+    """Generated path components must fit Linux/macOS filesystem limits."""
+
+    def test_long_thai_filename_preserves_extension_and_is_stable(self) -> None:
+        title = (
+            "_Living_Education-พื้นที่เขตการศึกษาในสังกัด"
+            "สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน" * 5
+        )
+        path = Path("Bedrock Tech Team") / f"{title}.md"
+
+        first = limit_path_component_bytes(path, max_bytes=255)
+        second = limit_path_component_bytes(path, max_bytes=255)
+
+        assert first == second
+        assert first.suffix == ".md"
+        assert len(first.name.encode("utf-8")) <= 255
+        assert "~" in first.name
+
+    def test_distinct_long_names_do_not_collapse_to_same_path(self) -> None:
+        prefix = "ชื่อหน้าที่ยาวมาก" * 30
+
+        first = limit_path_component_bytes(Path(f"{prefix}-A.md"), max_bytes=100)
+        second = limit_path_component_bytes(Path(f"{prefix}-B.md"), max_bytes=100)
+
+        assert first != second
+        assert len(first.name.encode("utf-8")) <= 100
+        assert len(second.name.encode("utf-8")) <= 100
 
 
 class TestSanitizeKey:

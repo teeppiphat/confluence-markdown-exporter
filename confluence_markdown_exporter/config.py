@@ -53,7 +53,7 @@ _CONFIG_KEYS_EPILOG = (
     "| `export.convert_status_badges` | Convert Confluence status badges to `<mark>` elements |\n\n"
     "| `export.convert_text_highlights` | Convert background-color spans to `<mark>` elements |\n\n"
     "| `export.convert_font_colors` | Convert font-color spans to `<font>` elements |\n\n"
-    "| `export.filename_length` | Maximum filename length (default: 255) |\n\n"
+    "| `export.filename_length` | Maximum UTF-8 bytes per path component (default: 255) |\n\n"
     "| `export.integrity_manifest_name` | SHA-256 manifest filename |\n\n"
     "| `connection_config.max_workers` | Parallel export workers (default: 20) |\n\n"
     "| `connection_config.space_workers` | Parallel space discovery workers (default: 4) |\n\n"

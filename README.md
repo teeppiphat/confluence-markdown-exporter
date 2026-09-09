@@ -54,6 +54,9 @@ required immediately.
 - Atomic writes now use normal system permissions (`0666` filtered by the process umask)
   and preserve existing permission bits when replacing files, so local preview processes
   can read exported images according to the destination's access policy.
+- Long page and attachment paths are limited by UTF-8 bytes rather than character count.
+  Multibyte titles are shortened with a stable hash while retaining extensions, avoiding
+  Linux/macOS `File name too long` errors without creating path collisions.
 
 ### Parallelism and output safety
 

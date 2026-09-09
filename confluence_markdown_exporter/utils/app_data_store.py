@@ -586,7 +586,11 @@ class ExportConfig(BaseModel):
     filename_length: int = Field(
         default=255,
         title="Filename Length",
-        description="Maximum length of the filename.",
+        description=(
+            "Maximum UTF-8 byte length of each generated path component. "
+            "Values above the common filesystem limit are capped at 255 bytes. "
+            "Long names are shortened with a stable hash while retaining file extensions."
+        ),
     )
     filename_lowercase: bool = Field(
         default=False,

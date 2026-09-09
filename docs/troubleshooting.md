@@ -46,6 +46,25 @@ Only one process can write to one `export.output_path`. Wait for the active expo
 finish, or assign a different output directory. The `.cme-export.lock` file may remain
 visible after completion; it is a lock target, not evidence that the lock is still held.
 
+### `OSError: [Errno 36] File name too long`
+
+Upgrade to a build containing the UTF-8 path-component limit. Linux and common macOS
+filesystems limit one filename or directory component to 255 bytes, not 255 Unicode
+characters. Thai and other multibyte titles can therefore exceed the filesystem limit
+even when they contain fewer than 255 characters.
+
+The exporter now measures UTF-8 bytes, preserves the file extension, and appends a stable
+12-character hash when shortening is required. The same protection covers page files,
+ancestor directories, attachments, debug artifacts, and comment sidecars. Re-run the
+original export command; the failed page will be retried while completed pages remain
+skipped.
+
+To choose a smaller portable limit explicitly:
+
+```sh
+cme config set export.filename_length=200
+```
+
 ### Large attachments
 
 Attachments are downloaded and written in 1 MiB chunks, then atomically moved into

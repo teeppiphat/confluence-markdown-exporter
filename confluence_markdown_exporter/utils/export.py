@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -16,6 +17,61 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 export_options = settings.export
+
+_FILESYSTEM_COMPONENT_MAX_BYTES = 255
+_TRUNCATION_HASH_LENGTH = 12
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    """Truncate text to a UTF-8 byte budget without splitting a code point."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _shorten_component(
+    value: str,
+    max_bytes: int,
+    *,
+    preserve_suffix: bool,
+) -> str:
+    """Shorten a path component deterministically while retaining uniqueness."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+
+    suffix = Path(value).suffix if preserve_suffix else ""
+    digest = hashlib.sha256(encoded).hexdigest()[:_TRUNCATION_HASH_LENGTH]
+    marker = f"~{digest}"
+    fixed_bytes = len(marker.encode()) + len(suffix.encode("utf-8"))
+    if fixed_bytes >= max_bytes:
+        return _truncate_utf8(value, max_bytes).rstrip(" .")
+
+    stem = value[: -len(suffix)] if suffix else value
+    prefix = _truncate_utf8(stem, max_bytes - fixed_bytes).rstrip(" .")
+    return f"{prefix}{marker}{suffix}"
+
+
+def limit_path_component_bytes(path: Path, max_bytes: int | None = None) -> Path:
+    """Ensure every relative path component fits common filesystem byte limits.
+
+    The configured filename length is interpreted as UTF-8 bytes and capped at
+    the POSIX/Linux ``NAME_MAX`` value. The final component keeps its extension;
+    shortened components include a stable digest to avoid collisions.
+    """
+    configured_limit = int(max_bytes or export_options.filename_length)
+    byte_limit = max(1, min(configured_limit, _FILESYSTEM_COMPONENT_MAX_BYTES))
+    parts = path.parts
+    shortened = [
+        _shorten_component(
+            part,
+            byte_limit,
+            preserve_suffix=index == len(parts) - 1,
+        )
+        for index, part in enumerate(parts)
+    ]
+    return Path(*shortened)
 
 
 def _open_atomic_temp(file_path: Path, *, binary: bool) -> tuple[BinaryIO | TextIO, Path]:
@@ -210,8 +266,14 @@ def sanitize_filename(filename: str) -> str:
     if export_options.filename_lowercase:
         sanitized = sanitized.lower()
 
-    # Limit length to specificed number of characters
-    return sanitized[: export_options.filename_length]
+    # Filesystems such as ext4 limit each path component by bytes, not Unicode
+    # characters. A stable digest keeps distinct long titles from collapsing to
+    # the same path after shortening.
+    return _shorten_component(
+        sanitized,
+        max(1, min(int(export_options.filename_length), _FILESYSTEM_COMPONENT_MAX_BYTES)),
+        preserve_suffix=False,
+    )
 
 
 def sanitize_key(s: str, connector: str = "_") -> str:

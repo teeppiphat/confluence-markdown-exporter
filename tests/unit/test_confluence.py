@@ -184,6 +184,29 @@ def _make_page(
     )
 
 
+class TestExportPathByteLimits:
+    """Page templates must not create overlong filesystem components."""
+
+    def test_long_multibyte_page_title_fits_with_markdown_extension(self) -> None:
+        page = _make_page(body="", body_export="", attachments=[])
+        page.title = (
+            "_Living_Education-พื้นที่เขตการศึกษาในสังกัด"
+            "สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน" * 5
+        )
+
+        with patch("confluence_markdown_exporter.confluence.settings") as mock_settings:
+            mock_settings.export.page_path = "{space_name}/{page_title}.md"
+            path = page.export_path
+
+        assert path.suffix == ".md"
+        assert len(path.name.encode("utf-8")) <= 255
+        assert "~" in path.name
+        for suffix in ("_body_view.html", "_body_export_view.html", ".comments.md"):
+            sidecar = page._sidecar_export_path(suffix)
+            assert len(sidecar.name.encode("utf-8")) <= 255
+            assert sidecar.name.endswith(Path(suffix).suffix)
+
+
 class TestAttachmentLinkConversion:
     """Plain Confluence download links should resolve to exported attachment paths."""
 
