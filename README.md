@@ -45,6 +45,64 @@ Supported targets include Obsidian, Gollum, Azure DevOps (ADO) wikis, Foam, Dend
 
 Full feature list, configuration reference, and target-system presets live in the **[documentation site](https://spenhouet.github.io/confluence-markdown-exporter/)**.
 
+## ที่มาและการปรับปรุงโครงการ
+
+Repository นี้เป็น fork ของโครงการต้นฉบับ
+[`Spenhouet/confluence-markdown-exporter`](https://github.com/Spenhouet/confluence-markdown-exporter)
+และพัฒนาต่อที่
+[`teeppiphat/confluence-markdown-exporter`](https://github.com/teeppiphat/confluence-markdown-exporter)
+โดยยังคงให้เครดิตผู้พัฒนาต้นฉบับและใช้สัญญาอนุญาต MIT ตามเดิม จุดประสงค์ของ fork
+คือเพิ่มความพร้อมสำหรับการสำรองและย้ายข้อมูล Confluence ปริมาณมากในงานจริง
+โดยเฉพาะข้อมูลภาษาไทย การทำงานผ่าน SSH และการกู้คืนเมื่อ export ไม่สมบูรณ์
+
+สิ่งที่ปรับปรุงเพิ่มเติมจากฐานโครงการต้นฉบับ ได้แก่:
+
+- เพิ่ม inventory ทุก Space ด้วย `cme list-spaces` ในรูปแบบตาราง, JSON และ CSV
+  พร้อม pagination และข้อมูลสำหรับวางแผน migration
+- เพิ่ม `cme orgs --all-spaces` เพื่อสำรอง global, personal และ archived spaces
+  ทั้งหมดที่บัญชี Confluence มีสิทธิ์เข้าถึง
+- เพิ่มการประมวลผลแบบขนานสำหรับ page export และ space discovery พร้อมแยก API client
+  ต่อ worker และป้องกันหลาย process เขียน output เดียวกัน
+- ปรับปรุงรูปภาพและไฟล์แนบให้ดาวน์โหลดแบบ streaming, เขียนแบบ atomic,
+  ตรวจขนาดไฟล์ ป้องกันชื่อชนกัน และสร้างลิงก์ local ที่ preview ได้
+- แก้ปัญหาชื่อไฟล์ภาษาไทยและชื่อ path ยาวเกินข้อจำกัด filesystem โดยวัดเป็น
+  UTF-8 bytes, ย่อชื่อพร้อม stable hash และใช้ชื่อ temporary file แบบสั้น
+- เพิ่ม failure report, targeted retry, lockfile resume และ integrity manifest
+  เพื่อให้กลับมาทำต่อและตรวจสอบความครบถ้วนของ backup ได้
+- เพิ่ม persistent background job queue ด้วย `--background` พร้อม `cme jobs`,
+  status, logs และ resume เพื่อให้งานทำต่อได้เมื่อ SSH หลุดหรือเกิด `Broken pipe`
+- เพิ่มคำแนะนำติดตั้งจาก source/Git commit และเอกสารสำหรับ complete backup,
+  troubleshooting และการใช้งานบน Linux/macOS/Windows
+
+## Project origin and enhancements
+
+This repository is a fork of the original
+[`Spenhouet/confluence-markdown-exporter`](https://github.com/Spenhouet/confluence-markdown-exporter)
+project and is maintained at
+[`teeppiphat/confluence-markdown-exporter`](https://github.com/teeppiphat/confluence-markdown-exporter).
+The original authors remain credited and the project continues under the MIT License.
+This fork focuses on production-scale Confluence backup and migration, including Thai and
+other multibyte content, long-running SSH workflows, and recoverable partial exports.
+
+Enhancements made in this fork include:
+
+- complete paginated space inventory through `cme list-spaces`, with table, JSON, and CSV
+  output for migration planning;
+- `cme orgs --all-spaces` for global, personal, and archived spaces visible to the
+  configured Confluence account;
+- bounded parallel page export and space discovery, thread-isolated API clients, and
+  cross-process output locking;
+- streamed and atomic attachment downloads, size verification, collision-resistant local
+  names, and preview-compatible image links and file permissions;
+- UTF-8 byte-aware path shortening with stable hashes and short atomic temporary names for
+  Linux/macOS filesystem compatibility;
+- sanitized failure reports, targeted retries, resumable lock state, and SHA-256 integrity
+  manifests;
+- a persistent FIFO background queue with job status, logs, and recovery commands that
+  continue working independently of an SSH session; and
+- expanded source/Git installation, complete-backup, troubleshooting, and cross-platform
+  usage documentation.
+
 ## Recent improvements in this repository
 
 The current repository version includes a reliability and large-backup upgrade. These
