@@ -18,6 +18,25 @@
    </a>
 </p>
 
+# Confluence Markdown Exporter
+
+## เครื่องมือสำรองและย้ายข้อมูล Confluence เป็น Markdown
+
+โปรเจกต์นี้ใช้ดึงหน้า เนื้อหา รูปภาพ และไฟล์แนบจาก Confluence มาเก็บไว้ในเครื่อง
+ในรูปแบบ Markdown สำหรับการสำรองข้อมูล ย้ายไประบบอื่น หรือใช้งานต่อกับ Obsidian,
+Azure DevOps Wiki, Gollum, Foam และระบบที่รองรับ Markdown โดยรองรับการดึงข้อมูลจำนวนมาก
+แบบขนาน การทำงานเบื้องหลัง การกลับมาทำงานต่อ และการตรวจสอบความครบถ้วนของไฟล์ที่ export
+
+### เอกสารหลัก
+
+- [Installation](https://spenhouet.github.io/confluence-markdown-exporter/installation) — วิธีติดตั้งด้วย curl, PowerShell, pip, uv รวมถึงติดตั้งจาก source และ Git commit
+- [Usage guide](https://spenhouet.github.io/confluence-markdown-exporter/usage) — วิธีดึง pages, descendants, spaces, orgs, all spaces, background jobs และโครงสร้าง output
+- [Feature list](https://spenhouet.github.io/confluence-markdown-exporter/features) — รายการ Confluence content, macros, add-ons, attachments และความสามารถสำหรับ backup ขนาดใหญ่
+
+> ฟีเจอร์ล่าสุดใน repository นี้อาจใหม่กว่าแพ็กเกจบน PyPI หากต้องการใช้ background
+> jobs, complete backup และแพตช์ล่าสุด ให้ติดตั้งจาก source checkout หรือ pin Git commit
+> ตามหัวข้อ [Install this source checkout](#install-this-source-checkout)
+
 ## What it does
 
 Exports individual pages, pages with descendants, or entire Confluence spaces via the Atlassian API into clean Markdown. Skips unchanged pages by default, re-exporting only what has changed since the last run.
@@ -223,7 +242,7 @@ Confluence attachment content ID by default. A completed run also writes
 write to the same output directory at a time; separate output directories can run in
 parallel safely.
 
-## Documentation
+## Documentation / เอกสารเพิ่มเติม
 
 The full documentation lives at **<https://spenhouet.github.io/confluence-markdown-exporter/>** and includes:
 

@@ -6,8 +6,15 @@ title: Features
 
 Exports individual pages, pages with descendants, or entire spaces via the Atlassian API. Skips unchanged pages by default, re-exporting only what has changed since the last run.
 
+> **สรุปภาษาไทย:** รองรับเนื้อหา Confluence ทั่วไป รูปภาพ ไฟล์แนบ comments,
+> page properties, macros และ add-ons ที่ระบุด้านล่าง พร้อมระบบ parallel export,
+> background queue, retry/resume และ integrity manifest สำหรับงาน backup ขนาดใหญ่
+
 ## Reliable large exports
 
+- **Persistent background jobs**: queues long-running commands with `--background`,
+  detaches work from SSH, retains completed and queued job history, captures per-job logs,
+  and supports recovery with `cme jobs resume`
 - **Bounded concurrency**: discovers multiple spaces in parallel and exports pages with
   separately configurable worker limits
 - **Safe resume**: writes Markdown, attachments, lock state, reports, and manifests

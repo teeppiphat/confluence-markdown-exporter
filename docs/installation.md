@@ -6,6 +6,11 @@ title: Installation
 
 Pick the install method that fits your environment. All methods produce the same `cme` / `confluence-markdown-exporter` CLI.
 
+> **สรุปภาษาไทย:** เลือกติดตั้งด้วย curl บน Linux/macOS, PowerShell บน Windows,
+> `pip`, `uv tool install`, source checkout หรือ Git commit ได้ หากต้องการใช้ฟีเจอร์ล่าสุด
+> จาก repository นี้ เช่น background jobs และ complete all-spaces backup ให้เลือก
+> **Source checkout** หรือ **Git commit** เพราะ release บน PyPI อาจยังไม่รวมแพตช์ล่าสุด
+
 === "Linux / macOS"
 
     ```bash
@@ -134,7 +139,14 @@ Pick the install method that fits your environment. All methods produce the same
     ```
 
 You should see the top-level commands: `pages`, `pages-with-descendants`, `spaces`,
-`list-spaces`, `orgs`, `retry-failures`, and `config`.
+`list-spaces`, `orgs`, `retry-failures`, `jobs`, and `config`.
+
+For a source or Git installation containing background-job support, verify both commands:
+
+```bash
+cme orgs --help
+cme jobs --help
+```
 
 ## Next steps
 

@@ -6,6 +6,11 @@ title: Usage
 
 Run the exporter with the desired Confluence page URL or space URL. Execute the console application by typing `confluence-markdown-exporter` (or its shorter alias `cme`) followed by one of the commands `pages`, `pages-with-descendants`, `spaces`, `list-spaces`, `orgs`, or `config`. Add `--help` to any command for additional information.
 
+> **สรุปภาษาไทย:** ใช้ `pages` สำหรับหน้าเดียวหรือหลายหน้า,
+> `pages-with-descendants` สำหรับหน้าและหน้าลูกทั้งหมด, `spaces` สำหรับทั้ง Space,
+> และ `orgs --all-spaces` สำหรับ backup ทุก Space ที่บัญชีเข้าถึงได้ งานขนาดใหญ่ควรเพิ่ม
+> `--background` แล้วตรวจด้วย `cme jobs` เพื่อให้งานทำต่อได้แม้ SSH หลุด
+
 All export commands accept one or more URLs as space-separated arguments. Each command also has a singular alias (`page`, `page-with-descendants`, `space`, `org`) that behaves identically.
 
 ## Export pages
@@ -115,6 +120,13 @@ To export every inventory entry in one backup run, opt in explicitly:
 
 ```sh
 cme orgs https://company.atlassian.net --all-spaces
+```
+
+For a long-running backup that survives an SSH disconnect:
+
+```sh
+cme orgs https://company.atlassian.net --all-spaces --background
+cme jobs
 ```
 
 This can be much larger than a normal organization export. Archived and personal spaces
