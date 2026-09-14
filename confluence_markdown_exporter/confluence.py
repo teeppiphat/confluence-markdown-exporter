@@ -71,6 +71,7 @@ from confluence_markdown_exporter.utils.export import save_stream
 from confluence_markdown_exporter.utils.lockfile import AttachmentEntry
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
+from confluence_markdown_exporter.utils.output_safety import PagePathRegistry
 from confluence_markdown_exporter.utils.output_safety import resolve_output_path
 from confluence_markdown_exporter.utils.page_registry import PageTitleRegistry
 from confluence_markdown_exporter.utils.rich_console import ExportStats
@@ -1061,9 +1062,10 @@ class Descendant(Document):
     @property
     def export_path(self) -> Path:
         filepath_template = Template(settings.export.page_path.replace("{", "${"))
-        return limit_path_component_bytes(
+        candidate = limit_path_component_bytes(
             Path(filepath_template.safe_substitute(self._template_vars))
         )
+        return PagePathRegistry.resolve(self.base_url, self.id, candidate)
 
     @classmethod
     def from_json(cls, data: JsonResponse, base_url: str) -> "Descendant":
@@ -1171,9 +1173,10 @@ class Page(Document):
     @property
     def export_path(self) -> Path:
         filepath_template = Template(settings.export.page_path.replace("{", "${"))
-        return limit_path_component_bytes(
+        candidate = limit_path_component_bytes(
             Path(filepath_template.safe_substitute(self._template_vars))
         )
+        return PagePathRegistry.resolve(self.base_url, self.id, candidate)
 
     @property
     def html(self) -> str:
@@ -1195,7 +1198,15 @@ class Page(Document):
             self.export_body()
         # Export attachments first so the files can be utilized during markdown conversion
         logger.debug("Exporting attachments for page id=%s", self.id)
-        attachment_entries = self.export_attachments()
+        attachment_error: RuntimeError | None = None
+        try:
+            attachment_entries = self.export_attachments()
+        except RuntimeError as error:
+            # Preserve the page body even when Confluence still lists an
+            # attachment whose binary endpoint returns 404/500. The page stays
+            # failed (and therefore retryable) after its Markdown is written.
+            attachment_entries = {}
+            attachment_error = error
         logger.debug("Converting to Markdown for page id=%s", self.id)
         self.export_markdown()
         if settings.export.comments_export != "none":
@@ -1204,6 +1215,8 @@ class Page(Document):
         logger.info(
             "Exported '%s' -> %s", self.title, settings.export.output_path / self.export_path
         )
+        if attachment_error is not None:
+            raise attachment_error
         return attachment_entries
 
     def export_with_descendants(self) -> None:
@@ -2140,7 +2153,7 @@ class Page(Document):
             rows = [
                 {
                     "file": _attachment_link(att),
-                    "modified": f"{att.version.friendly_when} by {self.convert_user(att.version.by)}",  # noqa: E501
+                    "modified": f"{att.version.friendly_when} by {self.format_user(att.version.by)}",  # noqa: E501
                 }
                 for att in self.page.attachments
             ]
@@ -2592,13 +2605,13 @@ class Page(Document):
         def convert_user_mention(self, el: BeautifulSoup, text: str, parent_tags: list[str]) -> str:
             if aid := el.get("data-account-id"):
                 try:
-                    return self.convert_user(User.from_accountid(str(aid), self.page.base_url))
+                    return self.format_user(User.from_accountid(str(aid), self.page.base_url))
                 except ApiNotFoundError:
                     logger.warning(f"User {aid} not found. Using text instead.")
 
             return self.convert_user_name(text)
 
-        def convert_user(self, user: User) -> str:
+        def format_user(self, user: User) -> str:
             return self.convert_user_name(user.display_name)
 
         def convert_user_name(self, name: str) -> str:

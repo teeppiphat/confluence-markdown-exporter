@@ -7,6 +7,7 @@ import pytest
 from confluence_markdown_exporter.utils.output_safety import OutputLockError
 from confluence_markdown_exporter.utils.output_safety import OutputPathCollisionError
 from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
+from confluence_markdown_exporter.utils.output_safety import PagePathRegistry
 from confluence_markdown_exporter.utils.output_safety import UnsafeOutputPathError
 from confluence_markdown_exporter.utils.output_safety import acquire_output_lock
 from confluence_markdown_exporter.utils.output_safety import resolve_output_path
@@ -35,6 +36,30 @@ def test_registry_allows_same_owner_to_reuse_path(tmp_path: Path) -> None:
     first = OutputPathRegistry.reserve(tmp_path, "space/page.md", "page:1")
     second = OutputPathRegistry.reserve(tmp_path, "space/page.md", "page:1")
     assert first == second
+
+
+def test_page_path_registry_disambiguates_duplicate_page_paths() -> None:
+    PagePathRegistry.reset()
+
+    first = PagePathRegistry.resolve("https://example.test", 1, Path("Space/Overview.md"))
+    second = PagePathRegistry.resolve("https://example.test", 2, Path("Space/Overview.md"))
+
+    assert first == Path("Space/Overview.md")
+    assert second == Path("Space/Overview~2.md")
+    assert PagePathRegistry.resolve(
+        "https://example.test", 2, Path("Space/Overview.md")
+    ) == Path("Space/Overview~2.md")
+
+
+def test_page_path_registry_preserves_lockfile_owner_priority() -> None:
+    PagePathRegistry.reset()
+    PagePathRegistry.preload("https://example.test", 1, Path("Space/Overview.md"))
+
+    conflicting = PagePathRegistry.resolve(
+        "https://example.test", 2, Path("Space/Overview.md")
+    )
+
+    assert conflicting == Path("Space/Overview~2.md")
 
 
 def test_second_output_lock_fails_without_waiting(tmp_path: Path) -> None:

@@ -228,6 +228,11 @@ fails, the command exits with status `1` after the remaining work finishes and w
 sanitized identifiers and error types, but no credentials, response bodies, or raw
 exception messages.
 
+When two different pages produce the same human-readable path, the first existing
+lockfile owner keeps that path and the other page receives `~<page_id>` before `.md`.
+When only an attachment download fails, the page Markdown is still written, but that page
+is intentionally not marked complete so `retry-failures` can try the binary again.
+
 Re-run the same export command to retry failed work. Pages recorded as complete in
 `confluence-lock.json` are skipped, while failed or incomplete pages are attempted
 again. A fully successful run exits with status `0` and removes a stale failure report

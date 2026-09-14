@@ -17,6 +17,7 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
+from confluence_markdown_exporter.utils.output_safety import PagePathRegistry
 from confluence_markdown_exporter.utils.output_safety import UnsafeOutputPathError
 from confluence_markdown_exporter.utils.output_safety import resolve_output_path
 from confluence_markdown_exporter.utils.page_registry import PageTitleRegistry
@@ -224,22 +225,27 @@ class LockfileManager:
         cls._all_entries_snapshot = dict(cls._lock.all_pages())
         cls._seen_page_ids = set()
         PageTitleRegistry.reset()
-        for pid, entry in cls._all_entries_snapshot.items():
-            try:
-                PageTitleRegistry.register(int(pid), entry.title)
-            except (TypeError, ValueError):
-                continue
-            OutputPathRegistry.reserve(
-                cls._output_path,
-                entry.export_path,
-                f"page:{pid}:markdown",
-            )
-            for attachment_id, attachment in entry.attachments.items():
-                OutputPathRegistry.reserve(
-                    cls._output_path,
-                    attachment.path,
-                    f"attachment:{attachment_id}",
-                )
+        PagePathRegistry.reset()
+        for org_url, org in cls._lock.orgs.items():
+            for space in org.spaces.values():
+                for pid, entry in space.pages.items():
+                    try:
+                        numeric_id = int(pid)
+                    except (TypeError, ValueError):
+                        continue
+                    PageTitleRegistry.register(numeric_id, entry.title)
+                    PagePathRegistry.preload(org_url, numeric_id, entry.export_path)
+                    OutputPathRegistry.reserve(
+                        cls._output_path,
+                        entry.export_path,
+                        f"page:{pid}:markdown",
+                    )
+                    for attachment_id, attachment in entry.attachments.items():
+                        OutputPathRegistry.reserve(
+                            cls._output_path,
+                            attachment.path,
+                            f"attachment:{attachment_id}",
+                        )
         logger.debug(
             "Lockfile initialized: %s (%d tracked page(s))",
             cls._lockfile_path,

@@ -26,8 +26,11 @@ Exports individual pages, pages with descendants, or entire spaces via the Atlas
 - **Integrity manifest**: records each exported artifact's byte size and SHA-256 digest
 - **Space inventory**: follows API pagination and lists every current or archived space
   type returned by Confluence as a table, JSON, or CSV for backup and migration planning
-- **Output protection**: rejects path collisions and prevents two exporter processes from
+- **Output protection**: resolves duplicate human-readable page paths with a stable page-ID
+  suffix, rejects unresolved artifact collisions, and prevents two exporter processes from
   writing to the same output directory at once
+- **Partial attachment recovery**: preserves page Markdown when an attachment binary is
+  unavailable while keeping the page in the failure report for later retry
 
 ## Supported Confluence features
 

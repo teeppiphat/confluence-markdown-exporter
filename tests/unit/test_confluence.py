@@ -92,6 +92,12 @@ class TestSquareBracketEscaping:
         result = converter.convert(html).strip()
         assert result == "[click here](https://example.com)"
 
+    def test_html_user_element_does_not_call_user_formatting_helper(
+        self, converter: Page.Converter
+    ) -> None:
+        result = converter.convert("<user><strong>Story owner</strong></user>").strip()
+        assert result == "**Story owner**"
+
 
 class TestAnchorLinkConversion:
     """Internal anchor links must use the href value for slug, not link text."""
@@ -425,6 +431,19 @@ class TestAttachmentsExportFlag:
 
         att.export.assert_called_once_with(overwrite=True)
         assert "att-1" in result
+
+    def test_page_markdown_is_saved_even_when_an_attachment_fails(self) -> None:
+        """A missing source binary must not suppress the page's Markdown backup."""
+        page = MagicMock(title="Page", id=42)
+        page.export_attachments.side_effect = RuntimeError("missing attachment")
+
+        with patch("confluence_markdown_exporter.confluence.settings") as mock_settings:
+            mock_settings.export.log_level = "INFO"
+            mock_settings.export.comments_export = "none"
+            with pytest.raises(RuntimeError, match="missing attachment"):
+                Page.export(page)
+
+        page.export_markdown.assert_called_once_with()
 
     def test_changed_attachment_overwrites_existing_file(self, tmp_path: Path) -> None:
         """A new attachment version replaces a file at the same export path."""

@@ -37,6 +37,7 @@ from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.measure_time import measure
 from confluence_markdown_exporter.utils.output_safety import OutputLockError
 from confluence_markdown_exporter.utils.output_safety import OutputPathRegistry
+from confluence_markdown_exporter.utils.output_safety import PagePathRegistry
 from confluence_markdown_exporter.utils.output_safety import acquire_output_lock
 from confluence_markdown_exporter.utils.rich_console import ExportStats
 from confluence_markdown_exporter.utils.rich_console import console
@@ -158,6 +159,7 @@ def _with_output_lock(func: Callable[P, R]) -> Callable[P, R]:
         if kwargs.get("background") is True:
             return func(*args, **kwargs)
         OutputPathRegistry.reset()
+        PagePathRegistry.reset()
         lock_timeout = -1 if os.environ.get("CME_JOB_ID") else 0
         with acquire_output_lock(get_settings().export.output_path, timeout=lock_timeout):
             return func(*args, **kwargs)

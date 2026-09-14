@@ -25,6 +25,21 @@ cme config set export.attachment_path='{space_name}/attachments/{attachment_titl
 Human-readable titles are not guaranteed unique. Include `{attachment_id}` in custom
 templates when overwrite protection is required.
 
+### Duplicate page output path
+
+Different page IDs can have the same space, ancestors, and title (commonly `Overview` in
+personal spaces). CME keeps the first existing lockfile path unchanged and automatically
+writes later collisions with a stable suffix such as `Overview~201490933.md`. Re-run the
+failed export or `cme retry-failures`; changing the global page template is not required.
+
+### Attachment returns HTTP 404 or 500
+
+Confluence can retain attachment metadata after its binary has become unavailable. CME
+records the attachment and parent page in `confluence-failures.json`, continues exporting
+the page Markdown, and exits `1` so the incomplete backup is visible. Retry transient
+timeouts and HTTP 500 responses. A repeatable HTTP 404 must be restored or removed in
+Confluence; the exporter cannot reconstruct a binary that the source no longer serves.
+
 ### Export stopped or was interrupted
 
 Re-run the same command. Markdown, attachments, lockfile, failure report, and manifest

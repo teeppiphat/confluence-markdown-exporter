@@ -67,6 +67,8 @@ Repository นี้เป็น fork ของโครงการต้นฉ
   ตรวจขนาดไฟล์ ป้องกันชื่อชนกัน และสร้างลิงก์ local ที่ preview ได้
 - แก้ปัญหาชื่อไฟล์ภาษาไทยและชื่อ path ยาวเกินข้อจำกัด filesystem โดยวัดเป็น
   UTF-8 bytes, ย่อชื่อพร้อม stable hash และใช้ชื่อ temporary file แบบสั้น
+- แก้ path ของหน้าที่ชื่อและลำดับ ancestor ซ้ำกันโดยเติม `~<page_id>` เฉพาะ
+  หน้าที่ชนกัน และยังบันทึก Markdown แม้ binary ของไฟล์แนบบางรายการเสียที่ต้นทาง
 - เพิ่ม failure report, targeted retry, lockfile resume และ integrity manifest
   เพื่อให้กลับมาทำต่อและตรวจสอบความครบถ้วนของ backup ได้
 - เพิ่ม persistent background job queue ด้วย `--background` พร้อม `cme jobs`,
@@ -136,6 +138,10 @@ required immediately.
   Linux/macOS `File name too long` errors without creating path collisions.
 - Atomic temporary files use a short independent name, so a valid destination that already
   reaches the 255-byte component limit can still be written safely on Linux.
+- Pages whose human-readable paths collide are disambiguated with a stable
+  `~<page_id>` suffix. Existing lockfile paths retain priority across retries.
+- If Confluence metadata references an unavailable attachment binary, the page Markdown
+  is still saved; the page remains failed and retryable until every attachment succeeds.
 
 ### Parallelism and output safety
 
@@ -145,8 +151,8 @@ required immediately.
 - API clients are isolated per worker thread.
 - A cross-process lock prevents two exporters from writing to the same output directory.
   Independent exports can still run in parallel when each uses a separate output path.
-- Export paths are checked for traversal, duplicate ownership, and page/attachment
-  collisions before files are written.
+- Export paths are checked for traversal and duplicate ownership. Page collisions are
+  resolved with page IDs; unresolved attachment collisions are rejected before writing.
 
 ### Resume, retry, and verification
 
