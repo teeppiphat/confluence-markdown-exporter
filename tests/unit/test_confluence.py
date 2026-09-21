@@ -195,10 +195,7 @@ class TestExportPathByteLimits:
 
     def test_long_multibyte_page_title_fits_with_markdown_extension(self) -> None:
         page = _make_page(body="", body_export="", attachments=[])
-        page.title = (
-            "_Living_Education-พื้นที่เขตการศึกษาในสังกัด"
-            "สำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน" * 5
-        )
+        page.title = "_Living_Education-พื้นที่เขตการศึกษาในสังกัดสำนักงานคณะกรรมการการศึกษาขั้นพื้นฐาน" * 5
 
         with patch("confluence_markdown_exporter.confluence.settings") as mock_settings:
             mock_settings.export.page_path = "{space_name}/{page_title}.md"
@@ -241,9 +238,9 @@ class TestAttachmentLinkConversion:
             result = conv.convert(html).strip()
 
         assert result == (
-            "[Video Agenzia Entrate (2).mp4]"
-            "(attachments/f5a14888-2775-4394-b5a4-ac0ffc0c39f5.mp4)"
+            "[Video Agenzia Entrate (2).mp4](attachments/f5a14888-2775-4394-b5a4-ac0ffc0c39f5.mp4)"
         )
+
 
 def _export_settings(tmp_path: Path) -> SimpleNamespace:
     return SimpleNamespace(
@@ -294,7 +291,6 @@ class TestMarkdownExport:
         main = tmp_path / "Test Page.md"
         assert main.exists()
         assert "<table>" in main.read_text(encoding="utf-8")
-
 
 
 class TestAttachmentsForExport:
@@ -418,9 +414,7 @@ class TestAttachmentsExportFlag:
 
         with (
             patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
-            patch(
-                "confluence_markdown_exporter.confluence.LockfileManager"
-            ) as mock_lockfile,
+            patch("confluence_markdown_exporter.confluence.LockfileManager") as mock_lockfile,
             patch("confluence_markdown_exporter.confluence.get_stats"),
         ):
             mock_settings.export.attachments_export = "referenced"
@@ -456,9 +450,7 @@ class TestAttachmentsExportFlag:
 
         with (
             patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
-            patch(
-                "confluence_markdown_exporter.confluence.LockfileManager"
-            ) as mock_lockfile,
+            patch("confluence_markdown_exporter.confluence.LockfileManager") as mock_lockfile,
             patch("confluence_markdown_exporter.confluence.get_stats"),
         ):
             mock_settings.export.attachments_export = "referenced"
@@ -481,9 +473,7 @@ class TestAttachmentsExportFlag:
 
         with (
             patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
-            patch(
-                "confluence_markdown_exporter.confluence.LockfileManager"
-            ) as mock_lockfile,
+            patch("confluence_markdown_exporter.confluence.LockfileManager") as mock_lockfile,
             patch("confluence_markdown_exporter.confluence.get_stats"),
         ):
             mock_settings.export.attachments_export = "referenced"
@@ -539,9 +529,7 @@ class TestAttachmentsExportFlag:
 
         with (
             patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
-            patch(
-                "confluence_markdown_exporter.confluence.LockfileManager"
-            ) as mock_lockfile,
+            patch("confluence_markdown_exporter.confluence.LockfileManager") as mock_lockfile,
             patch("confluence_markdown_exporter.confluence.get_stats"),
         ):
             mock_settings.export.attachments_export = "disabled"
@@ -559,12 +547,8 @@ class TestAttachmentsExportFlag:
         the same flag — body image and file links must keep resolving.
         """
         base_url = "https://example.atlassian.net"
-        fake_space = Space(
-            base_url=base_url, key="K", name="Space", description="", homepage=None
-        )
-        fake_user = User(
-            account_id="", username="", display_name="", public_name="", email=""
-        )
+        fake_space = Space(base_url=base_url, key="K", name="Space", description="", homepage=None)
+        fake_user = User(account_id="", username="", display_name="", public_name="", email="")
         fake_version = Version(number=1, by=fake_user, when="", friendly_when="")
         fake_attachment = Attachment(
             base_url=base_url,
@@ -622,9 +606,7 @@ class TestExportPagesStats:
         second = MagicMock(id=2, title="Second")
         reset_stats()
 
-        with patch(
-            "confluence_markdown_exporter.confluence.LockfileManager"
-        ) as mock_lockfile:
+        with patch("confluence_markdown_exporter.confluence.LockfileManager") as mock_lockfile:
             mock_lockfile.should_export.return_value = False
             export_pages([first])
             export_pages([second])
@@ -685,6 +667,7 @@ class TestOrganizationIsolation:
             patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
         ):
             mock_settings.connection_config.space_workers = 2
+            mock_settings.connection_config.max_workers = 4
             mock_settings.export.log_level = "INFO"
             org.export()
 
@@ -719,6 +702,7 @@ class TestOrganizationIsolation:
             patch("confluence_markdown_exporter.confluence.settings") as mock_settings,
         ):
             mock_settings.connection_config.space_workers = 2
+            mock_settings.connection_config.max_workers = 4
             mock_settings.export.log_level = "INFO"
             org.export()
 
@@ -887,11 +871,7 @@ class TestParseImageCaptions:
     def test_image_without_caption_excluded(self) -> None:
         from confluence_markdown_exporter.confluence import _parse_image_captions
 
-        storage = (
-            "<ac:image>"
-            '<ri:attachment ri:filename="no-caption.png"/>'
-            "</ac:image>"
-        )
+        storage = '<ac:image><ri:attachment ri:filename="no-caption.png"/></ac:image>'
         assert _parse_image_captions(storage) == {}
 
     def test_multiple_images_mixed(self) -> None:
@@ -1039,18 +1019,18 @@ class TestCellHighlightConversion:
 
     def test_td_hex_attribute_wraps_in_mark(self, converter: Page.Converter) -> None:
         html = (
-            '<table><tbody><tr>'
+            "<table><tbody><tr>"
             '<td data-highlight-colour="#fff0b3"><p>2</p></td>'
-            '</tr></tbody></table>'
+            "</tr></tbody></table>"
         )
         result = converter.convert(html)
         assert '<mark style="background: #fff0b3;">2</mark>' in result
 
     def test_th_hex_attribute_wraps_in_mark(self, converter: Page.Converter) -> None:
         html = (
-            '<table><tbody><tr>'
+            "<table><tbody><tr>"
             '<th data-highlight-colour="#ffd5d2"><p><strong>P / S</strong></p></th>'
-            '</tr></tbody></table>'
+            "</tr></tbody></table>"
         )
         result = converter.convert(html)
         assert '<mark style="background: #ffd5d2;">**P / S**</mark>' in result
@@ -1058,55 +1038,49 @@ class TestCellHighlightConversion:
     def test_default_header_gray_not_wrapped(self, converter: Page.Converter) -> None:
         """Confluence's default <th> background (#f4f5f7) is not user-chosen — skip."""
         html = (
-            '<table><tbody><tr>'
+            "<table><tbody><tr>"
             '<th data-highlight-colour="#f4f5f7"><p><strong>P / S</strong></p></th>'
             '<td data-highlight-colour="#f4f5f7"><p><strong>P5</strong></p></td>'
-            '</tr></tbody></table>'
+            "</tr></tbody></table>"
         )
         result = converter.convert(html)
         assert "<mark" not in result
 
     def test_transparent_attribute_not_wrapped(self, converter: Page.Converter) -> None:
         html = (
-            '<table><tbody><tr>'
+            "<table><tbody><tr>"
             '<td data-highlight-colour="transparent"><p>plain</p></td>'
-            '</tr></tbody></table>'
+            "</tr></tbody></table>"
         )
         result = converter.convert(html)
         assert "<mark" not in result
         assert "plain" in result
 
     def test_missing_attribute_not_wrapped(self, converter: Page.Converter) -> None:
-        html = (
-            '<table><tbody><tr><td><p>plain</p></td></tr></tbody></table>'
-        )
+        html = "<table><tbody><tr><td><p>plain</p></td></tr></tbody></table>"
         result = converter.convert(html)
         assert "<mark" not in result
         assert "plain" in result
 
     def test_invalid_hex_not_wrapped(self, converter: Page.Converter) -> None:
         html = (
-            '<table><tbody><tr>'
+            "<table><tbody><tr>"
             '<td data-highlight-colour="not-a-color"><p>x</p></td>'
-            '</tr></tbody></table>'
+            "</tr></tbody></table>"
         )
         result = converter.convert(html)
         assert "<mark" not in result
 
     def test_empty_cell_with_highlight_renders_nbsp(self, converter: Page.Converter) -> None:
-        html = (
-            '<table><tbody><tr>'
-            '<td data-highlight-colour="#ff8f73"></td>'
-            '</tr></tbody></table>'
-        )
+        html = '<table><tbody><tr><td data-highlight-colour="#ff8f73"></td></tr></tbody></table>'
         result = converter.convert(html)
         assert '<mark style="background: #ff8f73;">&nbsp;</mark>' in result
 
     def test_setting_disabled_returns_plain_text(self, converter: Page.Converter) -> None:
         html = (
-            '<table><tbody><tr>'
+            "<table><tbody><tr>"
             '<td data-highlight-colour="#fff0b3"><p>2</p></td>'
-            '</tr></tbody></table>'
+            "</tr></tbody></table>"
         )
         with patch("confluence_markdown_exporter.confluence.settings") as s:
             s.export.convert_text_highlights = False
@@ -1134,8 +1108,8 @@ class TestSpanFontColorConversion:
     def test_data_colorid_resolved_from_style_tag(self) -> None:
         page = MockPage()
         page.html = (
-            '<style>[data-colorid=abc123]{color:#ff5630} '
-            'html[data-color-mode=dark] [data-colorid=abc123]{color:#cf2600}</style>'
+            "<style>[data-colorid=abc123]{color:#ff5630} "
+            "html[data-color-mode=dark] [data-colorid=abc123]{color:#cf2600}</style>"
         )
         conv = Page.Converter(page)  # type: ignore[arg-type]
         html = '<p><span data-colorid="abc123">colored</span></p>'
@@ -1163,9 +1137,7 @@ class TestStatusBadgeConversion:
 
     def _badge(self, extra_class: str, label: str) -> str:
         classes = f"status-macro aui-lozenge aui-lozenge-visual-refresh {extra_class}".strip()
-        return (
-            f'<p><span class="{classes}" data-macro-name="status">{label}</span></p>'
-        )
+        return f'<p><span class="{classes}" data-macro-name="status">{label}</span></p>'
 
     def test_gray_badge(self, converter: Page.Converter) -> None:
         html = self._badge("", "IN PROGRESS")

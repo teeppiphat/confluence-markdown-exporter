@@ -985,7 +985,14 @@ def retry_failures(  # noqa: C901 - validation and replay branches are intention
         if not isinstance(retry_url, str) or not retry_url:
             continue
         retry_url = _safe_retry_url(retry_url)
-        retry_key = (category, retry_url)
+        # Page discovery, page export, and attachment failures all replay the
+        # same page-level operation. A single failed page commonly records all
+        # three, so canonicalize them before deduplication to avoid exporting
+        # the page repeatedly during one retry run.
+        retry_category = (
+            "page" if category in {"page", "page-discovery", "attachment"} else category
+        )
+        retry_key = (retry_category, retry_url)
         if retry_key in seen:
             continue
         seen.add(retry_key)

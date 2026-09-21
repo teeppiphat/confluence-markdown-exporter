@@ -133,6 +133,20 @@ This can be much larger than a normal organization export. Archived and personal
 are attempted independently; inaccessible entries are recorded in
 `confluence-failures.json` without stopping the remaining backup.
 
+When this command runs in an interactive terminal, CME displays a live worker dashboard.
+Its header shows the configured page and space worker limits plus the number of threads
+currently active. Each spawned thread has a row showing its pool, state, current space,
+page, or attachment, and elapsed time. Completed workers remain visible as `idle` until the
+operation finishes. Redirected output, CI, and background jobs automatically use plain logs
+instead of terminal control sequences.
+
+The worker limits shown by the dashboard can be changed with:
+
+```sh
+cme config set connection_config.max_workers=20
+cme config set connection_config.space_workers=4
+```
+
 `list-spaces` already inventories every space returned by Confluence, so it does not need
 an `--all-spaces` flag. The flag belongs to `orgs`, where it expands the export scope.
 

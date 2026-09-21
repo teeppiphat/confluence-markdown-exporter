@@ -81,6 +81,7 @@ from confluence_markdown_exporter.utils.table_converter import _MAX_TABLE_LINE_L
 from confluence_markdown_exporter.utils.table_converter import TableConverter
 from confluence_markdown_exporter.utils.table_converter import normalize_table_cell_text
 from confluence_markdown_exporter.utils.table_converter import to_markdown_table
+from confluence_markdown_exporter.utils.worker_monitor import worker_monitor
 
 JsonResponse: TypeAlias = dict
 StrPath: TypeAlias = str | PathLike[str]
@@ -583,6 +584,7 @@ class Organization(BaseModel):
         n = len(self.spaces)
         logger.info("Exporting %d space(s) from %s", n, self.base_url)
         discovery_workers = settings.connection_config.space_workers
+        page_workers = settings.connection_config.max_workers
         serial = settings.export.log_level == "DEBUG" or discovery_workers <= 1
 
         def handle_result(space: Space, pages: list[Page | Descendant]) -> None:
@@ -605,25 +607,34 @@ class Organization(BaseModel):
                 retry_url=f"{self.base_url}/wiki/spaces/{space.key}",
             )
 
-        if serial:
-            for space in self.spaces:
-                try:
-                    handle_result(space, space.pages)
-                except Exception as error:  # noqa: BLE001
-                    handle_error(space, error)
-            return
+        def discover(space: Space) -> list[Page | Descendant]:
+            with worker_monitor.activity("space", "discovering", f"{space.key} · {space.name}"):
+                return space.pages
 
-        logger.info("Discovering spaces in parallel (%d workers)", discovery_workers)
-        with ThreadPoolExecutor(max_workers=discovery_workers) as executor:
-            futures = {
-                executor.submit(lambda item=space: item.pages): space for space in self.spaces
-            }
-            for future in as_completed(futures):
-                space = futures[future]
-                try:
-                    handle_result(space, future.result())
-                except Exception as error:  # noqa: BLE001
-                    handle_error(space, error)
+        with worker_monitor.dashboard(
+            page_workers=page_workers,
+            space_workers=1 if serial else discovery_workers,
+        ):
+            if serial:
+                for space in self.spaces:
+                    try:
+                        handle_result(space, discover(space))
+                    except Exception as error:  # noqa: BLE001
+                        handle_error(space, error)
+                return
+
+            logger.info("Discovering spaces in parallel (%d workers)", discovery_workers)
+            with ThreadPoolExecutor(
+                max_workers=discovery_workers,
+                thread_name_prefix="cme-space",
+            ) as executor:
+                futures = {executor.submit(discover, space): space for space in self.spaces}
+                for future in as_completed(futures):
+                    space = futures[future]
+                    try:
+                        handle_result(space, future.result())
+                    except Exception as error:  # noqa: BLE001
+                        handle_error(space, error)
 
     @classmethod
     def from_json(cls, data: JsonResponse, base_url: str) -> "Organization":
@@ -964,22 +975,23 @@ class Attachment(Document):
         client = get_thread_confluence(self.base_url)
         response = None
         try:
-            session = client._session
-            response = session.request(
-                method="GET",
-                url=client.url + self.download_link,
-                stream=True,
-                timeout=client.timeout,
-                verify=client.verify_ssl,
-                proxies=client.proxies,
-                cert=client.cert,
-            )
-            response.raise_for_status()
-            written = save_stream(
-                filepath,
-                response.iter_content(chunk_size=1024 * 1024),
-                expected_size=self.file_size,
-            )
+            with worker_monitor.activity("page", "attachment", self.title):
+                session = client._session
+                response = session.request(
+                    method="GET",
+                    url=client.url + self.download_link,
+                    stream=True,
+                    timeout=client.timeout,
+                    verify=client.verify_ssl,
+                    proxies=client.proxies,
+                    cert=client.cert,
+                )
+                response.raise_for_status()
+                written = save_stream(
+                    filepath,
+                    response.iter_content(chunk_size=1024 * 1024),
+                    expected_size=self.file_size,
+                )
         except FileSizeMismatchError as e:
             logger.warning("Attachment '%s' size mismatch: %s", self.title, e)
             stats.inc_attachments_failed()
@@ -3695,11 +3707,13 @@ def _export_page_worker(page: "Page | Descendant", stats: ExportStats | None = N
         page: The page to export.
         stats: Optional stats tracker to update on completion.
     """
-    _page = Page.from_id(page.id, page.base_url)
-    attachment_entries = _page.export()
-    LockfileManager.record_page(_page, attachment_entries)
-    if stats is not None:
-        stats.inc_exported()
+    work = f"{page.id} · {page.title}"
+    with worker_monitor.activity("page", "exporting", work):
+        _page = Page.from_id(page.id, page.base_url)
+        attachment_entries = _page.export()
+        LockfileManager.record_page(_page, attachment_entries)
+        if stats is not None:
+            stats.inc_exported()
 
 
 def export_pages(pages: list["Page | Descendant"]) -> None:
@@ -3738,7 +3752,10 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
     mode_label = "serial" if serial else f"parallel ({max_workers} workers)"
     logger.debug("Export mode: %s, pages to export: %d", mode_label, len(pages_to_export))
 
-    with _make_progress() as progress:
+    with (
+        worker_monitor.dashboard(page_workers=1 if serial else max_workers),
+        _make_progress() as progress,
+    ):
         task = progress.add_task(
             f"[cyan]Exporting {len(pages_to_export)} page(s)[/cyan]",
             total=len(pages_to_export),
@@ -3757,14 +3774,15 @@ def export_pages(pages: list["Page | Descendant"]) -> None:
                         identifier=str(page.id),
                         title=page.title,
                         error_type=type(e).__name__,
-                        retry_url=(
-                            f"{page.base_url}/wiki/spaces/{page.space.key}/pages/{page.id}"
-                        ),
+                        retry_url=(f"{page.base_url}/wiki/spaces/{page.space.key}/pages/{page.id}"),
                     )
                 finally:
                     progress.advance(task)
         else:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="cme-page",
+            ) as executor:
                 futures = {
                     executor.submit(_export_page_worker, page, stats): page
                     for page in pages_to_export

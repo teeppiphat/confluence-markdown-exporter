@@ -148,6 +148,9 @@ required immediately.
 - Multiple space trees can be discovered concurrently with
   `connection_config.space_workers`; page export remains bounded by
   `connection_config.max_workers`.
+- Foreground interactive exports show a live worker dashboard with configured limits,
+  active thread count, and the space, page, or attachment handled by each worker. Background
+  jobs and redirected output retain plain, durable logs.
 - API clients are isolated per worker thread.
 - A cross-process lock prevents two exporters from writing to the same output directory.
   Independent exports can still run in parallel when each uses a separate output path.

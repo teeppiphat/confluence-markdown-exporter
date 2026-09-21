@@ -344,3 +344,41 @@ class TestFailureReport:
         mock_lockfile.record_page.assert_called_once_with(page, {})
         assert not report_path.exists()
         assert (tmp_path / "confluence-manifest.json").exists()
+
+    def test_retry_failures_deduplicates_page_and_attachment_entries_by_url(
+        self, tmp_path: Path
+    ) -> None:
+        """Attachment and page failures for one page must trigger one replay."""
+        settings = self._settings(tmp_path)
+        settings.export.log_level = "ERROR"
+        settings.export.save_log_to_file = False
+        retry_url = "https://example.test/wiki/spaces/KEY/pages/123"
+        (tmp_path / "confluence-failures.json").write_text(
+            json.dumps(
+                {
+                    "report_version": 2,
+                    "failures": [
+                        {"category": "attachment", "retry_url": retry_url},
+                        {"category": "attachment", "retry_url": retry_url},
+                        {"category": "page", "retry_url": retry_url},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        page = MagicMock(id=123, title="Recovered", base_url="https://example.test")
+        page.export.return_value = {}
+
+        with (
+            patch("confluence_markdown_exporter.main.get_settings", return_value=settings),
+            patch("confluence_markdown_exporter.main.LockfileManager"),
+            patch(
+                "confluence_markdown_exporter.confluence.Page.from_url",
+                return_value=page,
+            ) as mock_from_url,
+        ):
+            result = CliRunner().invoke(app, ["retry-failures"])
+
+        assert result.exit_code == 0
+        mock_from_url.assert_called_once_with(retry_url)
+        page.export.assert_called_once_with()
